@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {enforceApproval,approvalAuthority} from './approvals.mjs';
 import { id,now,businessDate,transaction,audit,journal } from './db.mjs';
 import { modules,allowed } from '../shared/modules.mjs';
 export class AppError extends Error { constructor(message,status=400){super(message);this.status=status;} }
@@ -59,18 +60,12 @@ export function orderDetail(db,ctx,orderId) {
   const order=scoped(db,'orders',ctx,orderId);assert(order,'Order not found in this outlet.',404);
   const payments=db.prepare('SELECT * FROM payments WHERE order_id=?').all(orderId),refunds=db.prepare('SELECT * FROM refunds WHERE order_id=?').all(orderId);
   const paid=payments.filter(p=>p.status==='recorded').reduce((s,p)=>s+p.amount,0),refunded=refunds.reduce((s,r)=>s+r.amount,0);
-  const splits=db.prepare('SELECT * FROM bill_splits WHERE order_id=?').all(orderId).map(r=>({...r,lines:JSON.parse(r.lines)}));
-  return {...order,lines:db.prepare('SELECT * FROM order_lines WHERE order_id=?').all(orderId).map(l=>({...l,recipe:JSON.parse(l.recipe),modifiers:JSON.parse(l.modifiers),allergens:JSON.parse(l.allergens)})),tasks:db.prepare('SELECT * FROM tasks WHERE order_id=?').all(orderId),payments,refunds,splits,paid,refunded,due:order.status==='cancelled'?0:Math.max(0,order.total-paid),paymentStatus:order.status==='cancelled'?paid>refunded?'refund_due':'cancelled':paid>=order.total?'paid':paid?'part_paid':'unpaid'};
+  const splits=db.prepare('SELECT * FROM bill_splits WHERE order_id=?').all(orderId).map(r=>({...r,lines:JSON.parse(r.lines),paid:db.prepare('SELECT COALESCE(SUM(amount),0) n FROM split_payments WHERE split_id=?').get(r.id).n,due:r.amount-db.prepare('SELECT COALESCE(SUM(amount),0) n FROM split_payments WHERE split_id=?').get(r.id).n}));
+  return {...order,assignedUserId:db.prepare('SELECT assigned_user_id FROM order_controls WHERE order_id=?').get(orderId)?.assigned_user_id||null,amendments:db.prepare('SELECT * FROM order_amendments WHERE order_id=? ORDER BY created_at').all(orderId).map(a=>({...a,details:JSON.parse(a.details)})),lines:db.prepare('SELECT l.* FROM order_lines l LEFT JOIN voided_lines v ON v.line_id=l.id WHERE l.order_id=? AND v.line_id IS NULL').all(orderId).map(l=>({...l,recipe:JSON.parse(l.recipe),modifiers:JSON.parse(l.modifiers),allergens:JSON.parse(l.allergens),...(db.prepare('SELECT task_id,seat,course,packed FROM line_service WHERE line_id=?').get(l.id)||{task_id:null,seat:0,course:1,packed:0})})),tasks:db.prepare('SELECT * FROM tasks WHERE order_id=?').all(orderId),payments,refunds,splits,paid,refunded,due:order.status==='cancelled'?0:Math.max(0,order.total-paid),paymentStatus:order.status==='cancelled'?paid>refunded?'refund_due':'cancelled':paid>=order.total?'paid':paid?'part_paid':'unpaid'};
 }
 export function orders(db,ctx) {return db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? ORDER BY created_at DESC LIMIT 300').all(ctx.tenantId,ctx.outletId).map(o=>orderDetail(db,ctx,o.id));}
-export function createOrder(db,ctx,input) {
-  permit(ctx,'orders','create');
-  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default('')})).min(1).max(100)}).parse(input);
-  return transaction(db,()=>{
-    const previous=db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(previous)return orderDetail(db,ctx,previous.id);
-    if(body.discount)assert(['owner','manager'].includes(ctx.user.role),'Manager approval is required for discounts.',403);
-    if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);}
-    const snapshots=body.lines.map(l=>{
+function snapshotLines(db,ctx,lines){
+  return lines.map(l=>{
       const item=scoped(db,'menu',ctx,l.itemId);assert(item,'Menu item is not mapped to this outlet. Import rejected; correct channel mapping.',404);assert(item.available,'This menu item is sold out.',409);
       const modifierOptions=JSON.parse(item.modifiers);assert(new Set(l.modifierIds).size===l.modifierIds.length,'A modifier cannot be selected twice.');
       const selected=l.modifierIds.map(mid=>{const m=modifierOptions.find(m=>m.id===mid);assert(m,'Invalid modifier selection.');return m;});
@@ -83,23 +78,37 @@ export function createOrder(db,ctx,input) {
       const allergens=[...new Set(recipe.flatMap(r=>JSON.parse(db.prepare('SELECT allergens FROM ingredients WHERE id=? AND tenant_id=?').get(r.ingredientId,ctx.tenantId)?.allergens||'[]')))];
       return {...l,item,recipe,allergens,selected,unitPrice:item.price+selected.reduce((s,m)=>s+m.price,0)};
     });
+}
+export function createOrder(db,ctx,input) {
+  permit(ctx,'orders','create');
+  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)})).min(1).max(100)}).parse(input);
+  return transaction(db,()=>{
+    const previous=db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(previous)return orderDetail(db,ctx,previous.id);
+    if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);}
+    const snapshots=snapshotLines(db,ctx,body.lines);
     const gross=snapshots.reduce((s,l)=>s+l.unitPrice*l.quantity,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000,'Order total exceeds the supported limit.');assert(body.discount<gross,'Discount must be less than the sale total.');
+    const approval=body.discount?enforceApproval(db,ctx,'discount',body.discount,gross):null;
     const total=gross-body.discount,net=Math.round(total/1.05),tax=total-net,oid=id('ord');
     const number=db.prepare('SELECT COALESCE(MAX(number),1000)+1 n FROM orders WHERE tenant_id=? AND outlet_id=?').get(ctx.tenantId,ctx.outletId).n;
     db.prepare('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(oid,ctx.tenantId,ctx.entityId,ctx.outletId,businessDate(),number,body.service,body.channel,body.tableId||null,body.customer,body.notes,'accepted',total,net,tax,body.discount,body.idempotencyKey,now(),now(),1);
-    for(const l of snapshots){const lid=id('line');db.prepare('INSERT INTO order_lines VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(lid,oid,l.itemId,l.item.name,l.quantity,l.unitPrice,l.item.station,l.item.version,JSON.stringify(l.recipe),JSON.stringify(l.selected),JSON.stringify(l.allergens),l.notes,0);
+    db.prepare('INSERT INTO order_controls(order_id,assigned_user_id) VALUES(?,?)').run(oid,db.prepare('SELECT id FROM users WHERE id=? AND tenant_id=?').get(ctx.user.id,ctx.tenantId)?ctx.user.id:null);
+    const stationTasks=new Map();
+    for(const l of snapshots){const group=JSON.stringify([l.item.station,l.course,l.hold]);if(!stationTasks.has(group)){const tid=id('task');db.prepare('INSERT INTO tasks(id,tenant_id,outlet_id,order_id,station,status) VALUES(?,?,?,?,?,?)').run(tid,ctx.tenantId,ctx.outletId,oid,l.item.station,l.hold?'held':'queued');stationTasks.set(group,tid);}const lid=id('line');db.prepare('INSERT INTO order_lines VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(lid,oid,l.itemId,l.item.name,l.quantity,l.unitPrice,l.item.station,l.item.version,JSON.stringify(l.recipe),JSON.stringify(l.selected),JSON.stringify(l.allergens),l.notes,0);
+      db.prepare('INSERT INTO line_service VALUES(?,?,?,?,0)').run(lid,stationTasks.get(group),l.seat,l.course);
       for(const r of l.recipe)allocate(db,ctx,r.ingredientId,r.quantity*l.quantity,oid,{orderId:oid,lineId:lid,reserve:true});
     }
-    for(const station of new Set(snapshots.map(l=>l.item.station)))db.prepare('INSERT INTO tasks(id,tenant_id,outlet_id,order_id,station) VALUES(?,?,?,?,?)').run(id('task'),ctx.tenantId,ctx.outletId,oid,station);
     journal(db,ctx,oid,'sale',[{account:'Receivables',debit:total},{account:'Sales',credit:net},{account:'Output VAT',credit:tax}]);
-    audit(db,ctx,'order.accepted',oid,{number,total,channel:body.channel});return orderDetail(db,ctx,oid);
+    audit(db,ctx,'order.accepted',oid,{number,total,channel:body.channel,discount:body.discount,approval});return orderDetail(db,ctx,oid);
   });
 }
 export function taskAction(db,ctx,taskId,input) {
-  permit(ctx,'kitchen');const body=z.object({action:z.enum(['start','ready','delay']),reason:text.optional()}).parse(input);
-  return transaction(db,()=>{const task=scoped(db,'tasks',ctx,taskId);assert(task,'Kitchen task not found.',404);const order=orderDetail(db,ctx,task.order_id);assert(!['cancelled','completed'].includes(order.status),'This order is closed.',409);
-    if(body.action==='start'){assert(task.status==='queued','Only queued tasks can start.',409);for(const l of order.lines.filter(l=>l.station===task.station))consumeLine(db,ctx,l,order.id);db.prepare("UPDATE tasks SET status='preparing',started_at=? WHERE id=?").run(now(),taskId);db.prepare("UPDATE orders SET status='preparing',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
-    if(body.action==='ready'){assert(task.status==='preparing','Start preparation before marking ready.',409);db.prepare("UPDATE tasks SET status='ready',ready_at=? WHERE id=?").run(now(),taskId);const pending=db.prepare("SELECT COUNT(*) n FROM tasks WHERE order_id=? AND status!='ready'").get(order.id).n;if(!pending)db.prepare("UPDATE orders SET status='ready',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
+  const body=z.object({action:z.enum(['start','ready','delay','fire','hold']),reason:text.optional()}).parse(input);
+  if(['fire','hold'].includes(body.action)&&allowed(ctx.user.role,'orders','create'))permit(ctx,'orders','create');else permit(ctx,'kitchen');
+  return transaction(db,()=>{const task=scoped(db,'tasks',ctx,taskId);assert(task,'Kitchen task not found.',404);const order=orderDetail(db,ctx,task.order_id);assert(!['cancelled','completed','handed_over'].includes(order.status),'This order is closed or handed over.',409);if(order.status==='held'&&['fire','start'].includes(body.action))assert(false,'Resume the held order before firing or preparing courses.',409);
+    if(body.action==='fire'){assert(task.status==='held','Only a held course can fire.',409);db.prepare("UPDATE tasks SET status='queued' WHERE id=?").run(taskId);}
+    if(body.action==='hold'){assert(task.status==='queued','Only an unstarted course can be held.',409);assert(body.reason?.trim(),'Enter the hold reason.');db.prepare("UPDATE tasks SET status='held',delay_reason=? WHERE id=?").run(body.reason,taskId);}
+    if(body.action==='start'){assert(task.status==='queued','Only queued tasks can start.',409);for(const l of order.lines.filter(l=>l.task_id?l.task_id===taskId:l.station===task.station))consumeLine(db,ctx,l,order.id);db.prepare("UPDATE tasks SET status='preparing',started_at=? WHERE id=?").run(now(),taskId);db.prepare("UPDATE orders SET status='preparing',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
+    if(body.action==='ready'){assert(task.status==='preparing','Start preparation before marking ready.',409);db.prepare("UPDATE tasks SET status='ready',ready_at=? WHERE id=?").run(now(),taskId);const pending=db.prepare("SELECT COUNT(*) n FROM tasks WHERE order_id=? AND status NOT IN ('ready','cancelled')").get(order.id).n;if(!pending)db.prepare("UPDATE orders SET status='ready',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
     if(body.action==='delay'){assert(body.reason?.trim(),'Enter a delay reason.');db.prepare('UPDATE tasks SET delay_reason=? WHERE id=?').run(body.reason,taskId);}
     audit(db,ctx,`kitchen.${body.action}`,taskId,{order:order.id,station:task.station});return orderDetail(db,ctx,order.id);
   });
@@ -116,32 +125,35 @@ export function orderAction(db,ctx,orderId,input) {
       journal(db,ctx,orderId,'cancellation',[{account:'Sales',debit:order.net},{account:'Output VAT',debit:order.tax},{account:'Receivables',credit:order.total}]);
       db.prepare("UPDATE orders SET status='cancelled',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);
     }
-    if(body.action==='handover'){assert(order.status==='ready','All kitchen stations must be ready before handover.',409);db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);}
+    if(body.action==='handover'){assert(order.status==='ready','All kitchen stations must be ready before handover.',409);if(['takeaway','pickup','delivery'].includes(order.service))assert(order.lines.every(l=>l.packed===l.quantity),'Complete the packing checklist before handover.',409);db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);}
     if(body.action==='complete'){assert(order.status==='handed_over','Record handover before completing the order.',409);assert(order.due===0,'Settle the remaining balance before completion.',409);db.prepare("UPDATE orders SET status='completed',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);}
-    if(body.action==='remake'){assert(['owner','manager'].includes(ctx.user.role),'A manager must approve a remake.',403);assert(body.reason?.trim(),'Enter the remake reason.');assert(!['cancelled','completed'].includes(order.status),'Closed orders cannot be remade.',409);const l=order.lines.find(l=>l.id===body.lineId);assert(l?.consumed,'Only a prepared item can be remade.');let cost=0;for(const r of l.recipe)cost+=allocate(db,ctx,r.ingredientId,r.quantity*l.quantity,orderId,{type:'remake',reason:body.reason});journal(db,ctx,id('remake'),'remake',[{account:'Food cost',debit:cost},{account:'Inventory',credit:cost}]);db.prepare("UPDATE tasks SET status='preparing',ready_at=NULL WHERE order_id=? AND station=?").run(orderId,l.station);db.prepare("UPDATE orders SET status='preparing',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);}
+    if(body.action==='remake'){assert(['owner','manager'].includes(ctx.user.role),'A manager must approve a remake.',403);assert(body.reason?.trim(),'Enter the remake reason.');assert(!['cancelled','completed'].includes(order.status),'Closed orders cannot be remade.',409);const l=order.lines.find(l=>l.id===body.lineId);assert(l?.consumed,'Only a prepared item can be remade.');let cost=0;for(const r of l.recipe)cost+=allocate(db,ctx,r.ingredientId,r.quantity*l.quantity,orderId,{type:'remake',reason:body.reason});journal(db,ctx,id('remake'),'remake',[{account:'Food cost',debit:cost},{account:'Inventory',credit:cost}]);if(l.task_id)db.prepare("UPDATE tasks SET status='preparing',ready_at=NULL WHERE id=?").run(l.task_id);else db.prepare("UPDATE tasks SET status='preparing',ready_at=NULL WHERE order_id=? AND station=?").run(orderId,l.station);db.prepare('UPDATE line_service SET packed=0 WHERE line_id=?').run(l.id);db.prepare("UPDATE orders SET status='preparing',version=version+1,updated_at=? WHERE id=?").run(now(),orderId);}
     audit(db,ctx,`order.${body.action}`,orderId,{reason:body.reason||'',lineId:body.lineId});return orderDetail(db,ctx,orderId);
   });
 }
 export function pay(db,ctx,orderId,input) {
   permit(ctx,'orders');assert(['owner','manager','cashier','accountant'].includes(ctx.user.role),'Your role cannot record payments.',403);
-  const body=z.object({amount:positive,method:z.enum(['cash','bank_recorded']),reference:text.default(''),tillId:z.string().optional(),idempotencyKey:key}).parse(input);
+  const body=z.object({amount:positive,method:z.enum(['cash','bank_recorded']),reference:text.default(''),tillId:z.string().optional(),splitId:z.string().optional(),idempotencyKey:key}).parse(input);
   return transaction(db,()=>{const prior=db.prepare('SELECT * FROM payments WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(prior){assert(prior.order_id===orderId,'Payment key is already used for another order.',409);return orderDetail(db,ctx,orderId);}
     const order=orderDetail(db,ctx,orderId);assert(order.status!=='cancelled','Cannot pay a cancelled order.',409);assert(body.amount<=order.due,'Payment exceeds the unpaid balance.',409);
+    if(order.splits.length){const split=order.splits.find(s=>s.id===body.splitId);assert(split,'Select the bill part receiving this payment.');assert(body.amount<=split.due,'Payment exceeds this bill part’s remaining balance.',409);}else assert(!body.splitId,'Bill part is not in this order.');
     if(body.method==='bank_recorded'){assert(['owner','accountant'].includes(ctx.user.role),'Finance must record bank evidence.',403);assert(body.reference.trim(),'A bank evidence reference is required.');}
     if(body.tillId){const till=getRecord(db,ctx,body.tillId);assert(till.module==='tills'&&till.status==='open','Select an open till session.');}
     const pid=id('payment');db.prepare('INSERT INTO payments VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(pid,ctx.tenantId,ctx.outletId,orderId,body.amount,body.method,body.reference,'recorded',body.tillId||null,body.idempotencyKey,now());
-    journal(db,ctx,pid,'payment',[{account:body.method==='cash'?'Cash':'Bank',debit:body.amount},{account:'Receivables',credit:body.amount}]);audit(db,ctx,'payment.recorded',pid,{orderId,amount:body.amount,method:body.method});return orderDetail(db,ctx,orderId);
+    if(body.splitId)db.prepare('INSERT INTO split_payments VALUES(?,?,?)').run(pid,body.splitId,body.amount);
+    journal(db,ctx,pid,'payment',[{account:body.method==='cash'?'Cash':'Bank',debit:body.amount},{account:'Receivables',credit:body.amount}]);audit(db,ctx,'payment.recorded',pid,{orderId,amount:body.amount,method:body.method,splitId:body.splitId});return orderDetail(db,ctx,orderId);
   });
 }
 export function refund(db,ctx,orderId,input) {
-  assert(['owner','accountant'].includes(ctx.user.role),'Owner or finance approval is required for refunds.',403);
+  assert(approvalAuthority(db,ctx,'refund').some(r=>r.amount>0),'Refund approval is outside your authority.',403);
   const body=z.object({paymentId:z.string(),amount:positive,reason:text.min(3),idempotencyKey:key}).parse(input);
   return transaction(db,()=>{const prior=db.prepare('SELECT * FROM refunds WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(prior){assert(prior.order_id===orderId,'Refund key belongs to another order.',409);return orderDetail(db,ctx,orderId);}
     const order=orderDetail(db,ctx,orderId),payment=order.payments.find(p=>p.id===body.paymentId);assert(payment,'Payment not found for this order.',404);const refunded=order.refunds.filter(r=>r.payment_id===payment.id).reduce((s,r)=>s+r.amount,0);assert(body.amount<=payment.amount-refunded,'Refund exceeds the remaining refundable payment.',409);
+    const approval=enforceApproval(db,ctx,'refund',order.refunded+body.amount,order.total);
     const rid=id('refund');db.prepare('INSERT INTO refunds VALUES(?,?,?,?,?,?,?,?,?,?)').run(rid,ctx.tenantId,ctx.outletId,orderId,payment.id,body.amount,body.reason,ctx.user.id,body.idempotencyKey,now());
     const net=Math.round((order.refunded+body.amount)*order.net/order.total)-Math.round(order.refunded*order.net/order.total),tax=body.amount-net;
     journal(db,ctx,rid,'refund',order.status==='cancelled'?[{account:'Receivables',debit:body.amount},{account:payment.method==='cash'?'Cash':'Bank',credit:body.amount}]:[{account:'Sales returns',debit:net},{account:'Output VAT',debit:tax},{account:payment.method==='cash'?'Cash':'Bank',credit:body.amount}]);
-    audit(db,ctx,'refund.approved',rid,{orderId,amount:body.amount,reason:body.reason,inventoryEffect:'none'});return orderDetail(db,ctx,orderId);
+    audit(db,ctx,'refund.approved',rid,{orderId,amount:body.amount,reason:body.reason,inventoryEffect:'none',approval});return orderDetail(db,ctx,orderId);
   });
 }
 export function createRecord(db,ctx,module,input) {
@@ -223,7 +235,7 @@ export function recordAction(db,ctx,recordId,input) {
     }
     if(['safety','incidents'].includes(r.module)&&['reviewed','resolved'].includes(body.action)){assert(['owner','safety'].includes(ctx.user.role),'The food-safety responsible person must approve this action.',403);assert(body.evidence?.trim(),'Verification evidence is required.');}
     if(r.module==='documents'&&body.action==='confirmed'){assert(['owner'].includes(ctx.user.role),'Owner review is required.',403);assert(body.evidence?.trim(),'Authority approval evidence is required.');}
-    if(r.module==='deliveries'&&body.action==='dispatched'){const order=orderDetail(db,ctx,r.data.orderId);assert(order.status==='ready','All kitchen stations must be ready before dispatch.');db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
+    if(r.module==='deliveries'&&body.action==='dispatched'){const order=orderDetail(db,ctx,r.data.orderId);assert(order.status==='ready','All kitchen stations must be ready before dispatch.');assert(order.lines.every(l=>l.packed===l.quantity),'Complete the packing checklist before dispatch.',409);db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
     if(r.module==='deliveries'&&body.action==='delivered')assert(body.evidence?.trim(),'Delivery acceptance evidence is required.');
     const index=cfg.states.indexOf(r.status),target=cfg.states.indexOf(body.action);
     const special=(r.module==='subscriptions'&&((r.status==='active'&&body.action==='paused')||(r.status==='paused'&&body.action==='active')||body.action==='cancelled'))||(r.module==='reservations'&&['cancelled','no_show'].includes(body.action))||(r.module==='leave'&&body.action==='rejected')||(r.module==='deliveries'&&body.action==='failed');
@@ -244,4 +256,22 @@ export function summary(db,ctx) {
   const foodCost=db.prepare(`SELECT COALESCE(SUM(jl.debit-jl.credit),0) n FROM journal_lines jl JOIN journals j ON j.id=jl.journal_id WHERE j.tenant_id=? AND j.outlet_id=? AND j.business_date=? AND jl.account='Food cost'`).get(ctx.tenantId,ctx.outletId,businessDate()).n;
   const byChannel=Object.entries(valid.reduce((a,o)=>{a[o.channel]=(a[o.channel]||0)+o.net-Math.round(o.refunded*o.net/o.total);return a;},{})).map(([name,amount])=>({name,amount}));
   return {businessDate:businessDate(),netSales:net,collected,orderCount:valid.length,completed,average:valid.length?Math.round(net/valid.length):0,openOrders:valid.filter(o=>!['completed','cancelled'].includes(o.status)).length,foodCost,contribution:net-foodCost,lowStock:low.length,actions:actions.slice(0,10),byChannel,liveOrders:allowed(ctx.user.role,'orders','read')?valid.filter(o=>!['completed','cancelled'].includes(o.status)).slice(0,6):[],definition:'Net sales: accepted orders for this business date, excluding VAT, cancelled sales and approved refunds. Collected: recorded tenders less refunds. Contribution: net sales less posted recipe consumption; excludes labour, rent, commissions and overhead.'};
+}
+
+export function amendOrder(db,ctx,orderId,input){
+  permit(ctx,'orders','create');
+  const line=z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)});
+  const b=z.object({version:positive,idempotencyKey:key,reason:text.min(3),removeLineIds:z.array(z.string()).max(100).default([]),addLines:z.array(line).max(100).default([])}).parse(input);
+  return transaction(db,()=>{const prior=db.prepare('SELECT order_id FROM order_amendments WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,b.idempotencyKey);if(prior){assert(prior.order_id===orderId,'Amendment key belongs to another order.',409);return orderDetail(db,ctx,orderId);}
+    const order=orderDetail(db,ctx,orderId);assert(['accepted','preparing','ready'].includes(order.status),'Only an open, resumed order can be amended.',409);assert(order.version===b.version,'Order changed. Refresh before amending.',409);assert(!order.refunded,'An order with refunds requires a financial correction.',409);assert(!order.splits.length,'Immutable bill parts require a financial correction, not an amendment.',409);assert(b.addLines.length||b.removeLineIds.length,'Select an addition or removal.');assert(new Set(b.removeLineIds).size===b.removeLineIds.length,'A line can be removed only once.');
+    const removed=b.removeLineIds.map(lid=>{const l=order.lines.find(l=>l.id===lid);assert(l,'Removal item is not in this order.',404);assert(!l.consumed,'A prepared item cannot be removed. Use approved cancellation or remake.',409);return l;});
+    const added=snapshotLines(db,ctx,b.addLines),remaining=order.lines.filter(l=>!b.removeLineIds.includes(l.id));assert(remaining.length+added.length>0&&remaining.length+added.length<=100,'Keep between 1 and 100 active item lines.');const gross=remaining.reduce((s,l)=>s+l.quantity*l.unit_price,0)+added.reduce((s,l)=>s+l.quantity*l.unitPrice,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000&&order.discount<gross,'Amended total is outside the supported range.');if(order.discount)enforceApproval(db,ctx,'discount',order.discount,gross);const total=gross-order.discount;assert(total>=order.paid,'Amendment would reduce the bill below recorded payments. Refund/correct it through finance.',409);const net=Math.round(total/1.05),tax=total-net,aid=id('amendment'),addedIds=[];
+    for(const l of order.lines.filter(l=>!l.task_id)){const task=order.tasks.find(t=>t.station===l.station);if(task)db.prepare('INSERT OR IGNORE INTO line_service VALUES(?,?,?,?,?)').run(l.id,task.id,l.seat,l.course,l.packed);}
+    for(const l of removed){db.prepare('INSERT INTO voided_lines VALUES(?,?,?)').run(l.id,aid,b.reason);db.prepare("UPDATE reservations SET status='released' WHERE line_id=? AND status='reserved'").run(l.id);}
+    for(const l of added){let task=db.prepare("SELECT t.id FROM tasks t JOIN line_service s ON s.task_id=t.id JOIN order_lines l ON l.id=s.line_id LEFT JOIN voided_lines v ON v.line_id=l.id WHERE t.order_id=? AND t.station=? AND t.status=? AND s.course=? AND v.line_id IS NULL LIMIT 1").get(order.id,l.item.station,l.hold?'held':'queued',l.course);if(!task){task={id:id('task')};db.prepare('INSERT INTO tasks(id,tenant_id,outlet_id,order_id,station,status) VALUES(?,?,?,?,?,?)').run(task.id,ctx.tenantId,ctx.outletId,order.id,l.item.station,l.hold?'held':'queued');}const lid=id('line');addedIds.push(lid);db.prepare('INSERT INTO order_lines VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(lid,order.id,l.itemId,l.item.name,l.quantity,l.unitPrice,l.item.station,l.item.version,JSON.stringify(l.recipe),JSON.stringify(l.selected),JSON.stringify(l.allergens),l.notes,0);db.prepare('INSERT INTO line_service VALUES(?,?,?,?,0)').run(lid,task.id,l.seat,l.course);for(const r of l.recipe)allocate(db,ctx,r.ingredientId,r.quantity*l.quantity,order.id,{orderId:order.id,lineId:lid,reserve:true});}
+    db.prepare("UPDATE tasks SET status='cancelled' WHERE order_id=? AND status IN ('queued','held') AND NOT EXISTS(SELECT 1 FROM line_service s JOIN order_lines l ON l.id=s.line_id LEFT JOIN voided_lines v ON v.line_id=l.id WHERE s.task_id=tasks.id AND v.line_id IS NULL)").run(order.id);
+    const pending=db.prepare("SELECT COUNT(*) n FROM tasks WHERE order_id=? AND status NOT IN ('ready','cancelled')").get(order.id).n;const consumed=remaining.some(l=>l.consumed);db.prepare('UPDATE orders SET total=?,net=?,tax=?,status=?,version=version+1,updated_at=? WHERE id=?').run(total,net,tax,!pending?'ready':consumed?'preparing':'accepted',now(),order.id);
+    const details={reason:b.reason,removed:removed.map(l=>({id:l.id,name:l.name,quantity:l.quantity,unitPrice:l.unit_price})),added:addedIds,previousVersion:order.version};db.prepare('INSERT INTO order_amendments VALUES(?,?,?,?,?,?,?,?,?,?)').run(aid,ctx.tenantId,ctx.outletId,order.id,b.idempotencyKey,order.total,total,JSON.stringify(details),ctx.user.id,now());
+    const delta=total-order.total,netDelta=net-order.net,taxDelta=tax-order.tax;const posting=(account,change)=>({account,debit:Math.max(change,0),credit:Math.max(-change,0)});if(delta||netDelta||taxDelta)journal(db,ctx,aid,'sale_amendment',[posting('Receivables',delta),posting('Sales',-netDelta),posting('Output VAT',-taxDelta)]);audit(db,ctx,'order.amended',order.id,{...details,amendmentId:aid,previousTotal:order.total,total});return orderDetail(db,ctx,order.id);
+  });
 }

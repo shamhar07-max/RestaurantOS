@@ -4,7 +4,7 @@ export const setCsrf=(value:string)=>{csrf=value;};
 export const setOutlet=(value:string)=>{outlet=value;localStorage.setItem('restaurant-outlet',value);};
 export async function api<T=any>(path:string,body?:unknown):Promise<T>{
   const response=await fetch(`/api${path}`,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf?{'x-csrf-token':csrf}:{}),...(outlet?{'x-outlet-id':outlet}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});
-  const data=await response.json();if(!response.ok)throw new Error(data.error||'The request could not be completed.');
+  const data=await response.json();if(!response.ok){const error=new Error(data.error||'The request could not be completed.') as Error&{status:number};error.status=response.status;throw error;}
   return data;
 }
 export async function download(type:string){

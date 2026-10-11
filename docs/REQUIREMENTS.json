@@ -51,8 +51,8 @@
       "priority": "P0",
       "requirement": "Refund/discount approvals",
       "acceptance": "A user above their limit is blocked;",
-      "status": "partial",
-      "note": "Role-based approval gates implemented; configurable limits/delegations pending."
+      "status": "implemented",
+      "note": "Outlet amount/percentage limits, cumulative refund limits, scoped named-user delegations and audit; operator limit policy review remains."
     },
     {
       "id": "ORD-07",
@@ -75,8 +75,8 @@
       "priority": "P0",
       "requirement": "Packing and handover",
       "acceptance": "Missing item is detectable; readiness and",
-      "status": "partial",
-      "note": "Ready/dispatch/acceptance distinct; packing checklist pending."
+      "status": "implemented",
+      "note": "Item/quantity packing checklist gates handover and delivery dispatch; remakes clear affected confirmations."
     },
     {
       "id": "ORD-10",
@@ -92,7 +92,7 @@
       "requirement": "Offline recovery",
       "acceptance": "Offline order sync preserves identity and",
       "status": "partial",
-      "note": "Local draft pending/failed/sync implemented; signed durable device queue/conflict tests pending."
+      "note": "Durable IndexedDB queue, registered P-256 device signing, scope/version/stock checks, idempotent replay, revocation and conflict review implemented and tested. Full offline startup/application cache and printer interruption remain pending."
     },
     {
       "id": "ORD-12",
@@ -107,8 +107,8 @@
       "priority": "P1",
       "requirement": "Seat/table bill split",
       "acceptance": "Split bills sum to the original amount with",
-      "status": "partial",
-      "note": "Immutable item-line/equal-amount allocations and split tenders; individual seat settlement pending."
+      "status": "implemented",
+      "note": "Seat/item/amount allocations preserve discount rounding; individual part payment caps and idempotency; per-unit sharing across seats remains."
     },
     {
       "id": "ORD-14",
@@ -300,7 +300,7 @@
       "requirement": "Entity/facility/brand separation",
       "acceptance": "Shared facility cannot expose one tenant's",
       "status": "partial",
-      "note": "Tenant/outlet isolation enforced; multiple legal entities/brands/stock locations admin pending."
+      "note": "Tenant/outlet checks, legal entity/brand/outlet administration and stock-location/station registers; physical stock placement/moves and intercompany workflows remain."
     },
     {
       "id": "CORE-02",

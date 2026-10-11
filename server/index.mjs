@@ -1,3 +1,4 @@
+import {packLine} from './service.mjs';
 import { openDatabase } from './db.mjs';
 import { seed } from './seed.mjs';
 import { createApp } from './app.mjs';
@@ -12,7 +13,7 @@ if(demo&&!db.prepare('SELECT COUNT(*) n FROM orders').get().n){
   for(const [index,item,service,customer] of [[1,'burger','dine_in','Table 03'],[2,'latte','takeaway','Maya'],[3,'bowl','delivery','Direct order'],[4,'salad','dine_in','Table 05'],[5,'espresso','takeaway','Walk-in']]){
     const order=createOrder(db,ctx,{service,customer,tableId:service==='dine_in'?`table_outlet_downtown_${index===1?3:5}`:undefined,channel:service==='delivery'?'Direct':'POS',idempotencyKey:`seed-order-${index}`,lines:[{itemId:`${item}_outlet_downtown`,quantity:index===1?2:1,modifierIds:item==='latte'?['oat']:[]}]});
     if(index<=3){taskAction(db,ctx,order.tasks[0].id,{action:'start'});if(index===2)taskAction(db,ctx,order.tasks[0].id,{action:'ready'});}
-    if(index===5){taskAction(db,ctx,order.tasks[0].id,{action:'start'});taskAction(db,ctx,order.tasks[0].id,{action:'ready'});pay(db,ctx,order.id,{amount:order.total,method:'cash',idempotencyKey:'seed-payment-5'});orderAction(db,ctx,order.id,{action:'handover'});orderAction(db,ctx,order.id,{action:'complete'});}
+    if(index===5){taskAction(db,ctx,order.tasks[0].id,{action:'start'});taskAction(db,ctx,order.tasks[0].id,{action:'ready'});pay(db,ctx,order.id,{amount:order.total,method:'cash',idempotencyKey:'seed-payment-5'});for(const line of order.lines)packLine(db,ctx,order.id,{lineId:line.id,quantity:line.quantity,reason:'Synthetic seed packing verification'});orderAction(db,ctx,order.id,{action:'handover'});orderAction(db,ctx,order.id,{action:'complete'});}
   }
 }
 const app=createApp(db,{demo,production});
