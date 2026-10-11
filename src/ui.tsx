@@ -1,12 +1,12 @@
 import {createContext,useContext,useEffect,useRef,useState,type ReactNode} from 'react';
 import {X,LoaderCircle,Inbox,AlertCircle,ChevronRight} from 'lucide-react';
-import {api,label,money} from './api';
+import {api,label,money,dateTime} from './api';
 export type Row=Record<string,any>;
 export const AppContext=createContext<any>(null);
 export const useApp=()=>useContext(AppContext);
-export function useData<T=any>(path:string,initial:T):{data:T,loading:boolean,error:string}{
+export function useData<T=any>(path:string|null,initial:T):{data:T,loading:boolean,error:string}{
   const {version}=useApp();const [data,setData]=useState<T>(initial),[loading,setLoading]=useState(true),[error,setError]=useState('');
-  useEffect(()=>{let active=true;setLoading(true);setError('');api<T>(path).then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[path,version]);
+  useEffect(()=>{let active=true;setLoading(true);setError('');if(!path){setData(initial);setLoading(false);return;}api<T>(path).then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);}).finally(()=>{if(active)setLoading(false);});return()=>{active=false;};},[path,version]);
   return {data,loading,error};
 }
 export function Status({value}:{value:string}){return <span className={`status status-${value}`}><span aria-hidden="true" className="status-dot"/>{label(value)}</span>;}
@@ -25,6 +25,7 @@ export function Field({label:caption,children,hint}:{label:string,children:React
 export function DataTable({headers,children}:{headers:string[],children:ReactNode}){return <div className="table-wrap"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;}
 export function RecordValue({field,value,refs}:{field:Row,value:any,refs:Row}){
   if(value===undefined||value==='')return <span className="muted">—</span>;
+  if(field.type==='datetime-local'){const stamp=/([Zz]|[+-]\d\d:\d\d)$/.test(String(value))?String(value):String(value)+'+04:00';return Number.isFinite(new Date(stamp).getTime())?<>{dateTime(stamp)} · UAE time</>:<>{String(value)}</>;}
   if(field.label.includes('fils'))return <>{money(Number(value))}</>;
   const lookup=refs[field.type]?.find((r:Row)=>r.id===value);return <>{lookup?.name||lookup?.data?.name||String(value)}</>;
 }

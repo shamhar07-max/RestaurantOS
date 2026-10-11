@@ -99,8 +99,8 @@
       "priority": "P1",
       "requirement": "Reservations/deposits",
       "acceptance": "Deposit allocation and cancellation follow",
-      "status": "partial",
-      "note": "Capacity/conflicts and reservation lifecycle implemented; deposits/waitlist pending."
+      "status": "implemented",
+      "note": "Capacity-aware UAE-time bookings, guarded lifecycle, walk-in waitlist, physical table groups, deposit receipts/application/original-source refunds and outstanding finance register implemented and tested. Manual recorded funds only. Closed-till corrections, forfeiture/no-show pricing, configurable tax policy and pilot validation remain staged gates."
     },
     {
       "id": "ORD-13",

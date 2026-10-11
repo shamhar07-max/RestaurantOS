@@ -6,8 +6,8 @@ Initial operating format: dine-in + takeaway + delivery. All evidence uses synth
 
 - Clean lockfile installation previously passed with `npm ci --cache /workspace/.cache/npm --no-audit --no-fund`.
 - `npm run build`: TypeScript checking and Vite production build passed for the continuation batch.
-- `npm test`: original 28 domain/HTTP tests plus account/security/organisation/approvals (8), connected service (8), and signed offline recovery (4): 48 tests passed together.
-- `npm run test:e2e`: 15 browser workflows passed together. Includes all workspaces, persistence, POS → kitchen → packing → handover, partial receiving/evidence, guest delivery, cashier restrictions, keyboard-safe mobile navigation, approval/access administration, organisation stations, held courses, ownership/amendments, seat tenders, and signed draft reload/sync. Menu-conflict review retains its draft until acceptance succeeds; draft-discard confirmation preserves data when cancelled.
+- `npm test`: original 28 domain/HTTP tests plus account/security/organisation/approvals (8), connected service (8), signed offline recovery (4), and hospitality/seating/deposits (9): 57 tests passed together.
+- `npm run test:e2e`: 19 browser workflows passed together. Includes all workspaces, persistence, POS → kitchen → packing → handover, partial receiving/evidence, guest delivery, cashier restrictions, keyboard-safe mobile navigation, approval/access administration, organisation stations, held courses, ownership/amendments, seat tenders, and signed draft reload/sync. Menu-conflict review retains its draft until acceptance succeeds; draft-discard confirmation preserves data when cancelled.
 - Screenshot capture rerun with reduced motion: course, amendment and offline desktop/mobile workflows passed. Evidence is under `.impeccable/review/` (ignored runtime artifacts).
 - Consistent online backup and restoration of attachment bytes/SHA-256 passed in the baseline tests. Database backups exclude browser-held drafts and the separate authenticator encryption key; preserve these according to README.
 
@@ -19,7 +19,7 @@ The initial independent Impeccable reviewer scored mobile-navigation, readable-t
 
 ## Scope and source persistence
 
-The supplied feature brief is retained in full. All 54 research catalogue entries are mapped: 22 implemented core, 24 partial, 8 planned. Definitions and remaining specialist capabilities are explicit in REQUIREMENTS.json and IMPLEMENTATION-PLAN.md.
+The supplied feature brief is retained in full. All 54 research catalogue entries are mapped: 23 implemented core, 23 partial, 8 planned. Definitions and remaining specialist capabilities are explicit in REQUIREMENTS.json and IMPLEMENTATION-PLAN.md.
 
 The baseline source was committed and pushed to GitHub main (`1dae9a8`). This continuation adds account security, configurable approvals/delegations, organisation registers, course/packing/amendment/seat controls and durable signed offline recovery. Its final commit and remote verification are reported with the delivery. Deployment, production provider connection and regulator certification are not claimed.
 
@@ -28,3 +28,13 @@ The baseline source was committed and pushed to GitHub main (`1dae9a8`). This co
 Stage 1 still needs Arabic/RTL, approved logo masters and real operator/security policy validation. Stage 2 still needs prepared-item corrections after refunds/splits, per-unit sharing, waitlist/deposits/table merging, combos/variants, complete offline startup and printer fallback. Later stages retain the stock/production, finance, specialist-service, integration and rollout gates in IMPLEMENTATION-PLAN.md. An implemented screen or test does not close these gates.
 
 Built development app restarted successfully: health, web root, owner demo login and authenticated bootstrap all returned HTTP 200 on port 3001, with existing outlet data and configured stations.
+
+## Host-service continuation
+
+Implemented and checked walk-in waitlist calling/seating/departure, physical table groups and protected release, UAE-time booking windows, reservation deposit receipts, application to an order/bill part, original-source partial refunds, cumulative booking approval across applied/unapplied amounts, deposit-aware till counts, and finance access to outstanding/cancelled booking advances. Existing order bills and kitchen evidence remain distinct when seating is combined.
+
+New backend checks cover group capacity/member booking conflicts, occupancy and state/version guards, receipt/application/refund replay, no duplicate cash collection, approval bypass prevention, closed-period rollback and tenant/outlet/host-versus-finance permissions. New browser workflows cover waitlist departure, seating combination/release, recorded bank advance to a meal bill, and accountant deposit review.
+
+The independent hospitality reviewer requested one state fix: summary loading/failure must not appear as a verified zero balance. Explicit loading/unavailable states and withheld controls are implemented; the post-fix five-workflow browser run passed, including delayed, failed and recovered summaries. The independent verdict was **ship**, scoring this state issue resolved. Ordinary extension documentation preserves the incumbent design artifacts. Tax treatment, legal receipts, closed-till corrections, automatic forfeiture/no-show terms and production validation remain staged gates.
+
+Host-service built development app restarted against the existing database: web root, health, scoped waitlist, active table groups and finance reservation-deposit register returned HTTP 200. The final build passed. The 19-workflow full browser run plus post-fix five-workflow run cover 20 distinct browser workflows; they are reported separately rather than claiming a combined 20-test run.

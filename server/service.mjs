@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {seatingGroup} from './seating.mjs';
 import {id,now,transaction,audit} from './db.mjs';
 import {assert,permit,orderDetail,getRecord} from './domain.mjs';
 export function splitBill(db,ctx,orderId,input){
@@ -7,7 +8,7 @@ export function splitBill(db,ctx,orderId,input){
 }
 export function transferTable(db,ctx,orderId,input){
   permit(ctx,'tables');const b=z.object({tableId:z.string(),reason:z.string().min(3).max(500)}).parse(input);
-  return transaction(db,()=>{const o=orderDetail(db,ctx,orderId);assert(o.service==='dine_in','Only table orders can transfer.');assert(!['completed','cancelled'].includes(o.status),'Order is closed.');assert(db.prepare('SELECT id FROM dining_tables WHERE id=? AND tenant_id=? AND outlet_id=?').get(b.tableId,ctx.tenantId,ctx.outletId),'Destination table not found.',404);assert(o.table_id!==b.tableId,'Select another table.');db.prepare('UPDATE orders SET table_id=?,updated_at=?,version=version+1 WHERE id=?').run(b.tableId,now(),orderId);audit(db,ctx,'table.order_transferred',orderId,{from:o.table_id,to:b.tableId,reason:b.reason});return orderDetail(db,ctx,orderId);});
+  return transaction(db,()=>{const o=orderDetail(db,ctx,orderId);assert(o.service==='dine_in','Only table orders can transfer.');assert(!['completed','cancelled'].includes(o.status),'Order is closed.');assert(db.prepare('SELECT id FROM dining_tables WHERE id=? AND tenant_id=? AND outlet_id=?').get(b.tableId,ctx.tenantId,ctx.outletId),'Destination table not found.',404);b.tableId=seatingGroup(db,ctx,b.tableId).rootId;assert(o.table_id!==b.tableId,'Select another table.');db.prepare('UPDATE orders SET table_id=?,updated_at=?,version=version+1 WHERE id=?').run(b.tableId,now(),orderId);audit(db,ctx,'table.order_transferred',orderId,{from:o.table_id,to:b.tableId,reason:b.reason});return orderDetail(db,ctx,orderId);});
 }
 export function disposeLot(db,ctx,lotId,input){
   permit(ctx,'inventory','hold');assert(['owner','manager','safety'].includes(ctx.user.role),'Management or safety approval is required.',403);const b=z.object({quantity:z.number().int().positive(),reason:z.string().min(3).max(1000)}).parse(input);

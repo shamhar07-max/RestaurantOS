@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {seatingGroup,bookingConflict,arrivalTime,seatAvailable} from './seating.mjs';
 import {enforceApproval,approvalAuthority} from './approvals.mjs';
 import { id,now,businessDate,transaction,audit,journal } from './db.mjs';
 import { modules,allowed } from '../shared/modules.mjs';
@@ -84,7 +85,7 @@ export function createOrder(db,ctx,input) {
   const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)})).min(1).max(100)}).parse(input);
   return transaction(db,()=>{
     const previous=db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(previous)return orderDetail(db,ctx,previous.id);
-    if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);}
+    if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);body.tableId=seatingGroup(db,ctx,body.tableId).rootId;}
     const snapshots=snapshotLines(db,ctx,body.lines);
     const gross=snapshots.reduce((s,l)=>s+l.unitPrice*l.quantity,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000,'Order total exceeds the supported limit.');assert(body.discount<gross,'Discount must be less than the sale total.');
     const approval=body.discount?enforceApproval(db,ctx,'discount',body.discount,gross):null;
@@ -149,11 +150,14 @@ export function refund(db,ctx,orderId,input) {
   const body=z.object({paymentId:z.string(),amount:positive,reason:text.min(3),idempotencyKey:key}).parse(input);
   return transaction(db,()=>{const prior=db.prepare('SELECT * FROM refunds WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(prior){assert(prior.order_id===orderId,'Refund key belongs to another order.',409);return orderDetail(db,ctx,orderId);}
     const order=orderDetail(db,ctx,orderId),payment=order.payments.find(p=>p.id===body.paymentId);assert(payment,'Payment not found for this order.',404);const refunded=order.refunds.filter(r=>r.payment_id===payment.id).reduce((s,r)=>s+r.amount,0);assert(body.amount<=payment.amount-refunded,'Refund exceeds the remaining refundable payment.',409);
+    if(payment.method==='deposit_cash'&&payment.till_id){assert(getRecord(db,ctx,payment.till_id).status==='open','The original deposit till is closed. Finance must handle a documented correction.',409);}
+    let bookingApproval=null;
+    if(['deposit_cash','deposit_bank'].includes(payment.method)){const deposit=db.prepare('SELECT d.* FROM booking_deposits d JOIN deposit_movements m ON m.deposit_id=d.id WHERE m.payment_id=?').get(payment.id);assert(deposit,'Original booking deposit evidence is missing.',409);const original=db.prepare('SELECT SUM(amount) n FROM booking_deposits WHERE booking_id=?').get(deposit.booking_id).n;const unusedRefunds=db.prepare("SELECT COALESCE(SUM(m.amount),0) n FROM deposit_movements m JOIN booking_deposits d ON d.id=m.deposit_id WHERE d.booking_id=? AND m.action='refund'").get(deposit.booking_id).n;const usedRefunds=db.prepare('SELECT COALESCE(SUM(r.amount),0) n FROM refunds r JOIN deposit_movements m ON m.payment_id=r.payment_id JOIN booking_deposits d ON d.id=m.deposit_id WHERE d.booking_id=?').get(deposit.booking_id).n;bookingApproval=enforceApproval(db,ctx,'refund',unusedRefunds+usedRefunds+body.amount,original);}
     const approval=enforceApproval(db,ctx,'refund',order.refunded+body.amount,order.total);
     const rid=id('refund');db.prepare('INSERT INTO refunds VALUES(?,?,?,?,?,?,?,?,?,?)').run(rid,ctx.tenantId,ctx.outletId,orderId,payment.id,body.amount,body.reason,ctx.user.id,body.idempotencyKey,now());
     const net=Math.round((order.refunded+body.amount)*order.net/order.total)-Math.round(order.refunded*order.net/order.total),tax=body.amount-net;
-    journal(db,ctx,rid,'refund',order.status==='cancelled'?[{account:'Receivables',debit:body.amount},{account:payment.method==='cash'?'Cash':'Bank',credit:body.amount}]:[{account:'Sales returns',debit:net},{account:'Output VAT',debit:tax},{account:payment.method==='cash'?'Cash':'Bank',credit:body.amount}]);
-    audit(db,ctx,'refund.approved',rid,{orderId,amount:body.amount,reason:body.reason,inventoryEffect:'none',approval});return orderDetail(db,ctx,orderId);
+    journal(db,ctx,rid,'refund',order.status==='cancelled'?[{account:'Receivables',debit:body.amount},{account:['cash','deposit_cash'].includes(payment.method)?'Cash':'Bank',credit:body.amount}]:[{account:'Sales returns',debit:net},{account:'Output VAT',debit:tax},{account:['cash','deposit_cash'].includes(payment.method)?'Cash':'Bank',credit:body.amount}]);
+    audit(db,ctx,'refund.approved',rid,{orderId,amount:body.amount,reason:body.reason,inventoryEffect:'none',approval,bookingApproval});return orderDetail(db,ctx,orderId);
   });
 }
 export function createRecord(db,ctx,module,input) {
@@ -168,8 +172,7 @@ export function createRecord(db,ctx,module,input) {
       if(f.type==='outlet')assert(db.prepare('SELECT id FROM outlets WHERE id=? AND tenant_id=?').get(data[f.key],ctx.tenantId),'Destination outlet not found.',404);
     }
     if(module==='reservations'){
-      const table=scoped(db,'dining_tables',ctx,data.tableId);assert(data.partySize>0&&data.partySize<=table.seats,'Party exceeds table capacity.');assert(new Date(data.startsAt)<new Date(data.endsAt),'Departure must follow arrival.');
-      const existing=db.prepare("SELECT data FROM records WHERE tenant_id=? AND outlet_id=? AND module='reservations' AND status IN ('confirmed','seated')").all(ctx.tenantId,ctx.outletId).map(r=>JSON.parse(r.data));assert(!existing.some(r=>r.tableId===data.tableId&&r.startsAt<data.endsAt&&r.endsAt>data.startsAt),'This table is already reserved for that time.',409);
+      const group=seatingGroup(db,ctx,data.tableId);assert(data.partySize>0&&data.partySize<=group.capacity,'Party exceeds table capacity.');data.startsAt=arrivalTime(data.startsAt);data.endsAt=arrivalTime(data.endsAt);assert(data.startsAt<data.endsAt,'Departure must follow arrival.');assert(!bookingConflict(db,ctx,group.ids,data.startsAt,data.endsAt),'This table is already reserved for that time.',409);data.tableId=group.rootId;
     }
     if(['purchases','transfers','wastage'].includes(module))assert(data.quantity>0,'Quantity must be positive.');
     if(module==='purchases'){assert(getRecord(db,ctx,data.supplierId).status==='approved','Supplier must be approved.');data.received=0;}
@@ -226,7 +229,7 @@ export function recordAction(db,ctx,recordId,input) {
       assert(r.status==='active','Only active subscriptions can be fulfilled.');assert(r.data.used<r.data.entitlements,'No funded entitlement remains.');assert(body.evidence?.trim(),'Delivery evidence is required.');audit(db,ctx,'subscription.meal_delivered',r.id,{number:r.data.used+1,evidence:body.evidence});return updateRecord(db,ctx,r,r.status,{...r.data,used:r.data.used+1});
     }
     if(r.module==='tills'&&body.action==='closed'){
-      assert(r.status==='open','Till is already closed.');assert(body.counted!==undefined,'Enter the closing cash count.');const collected=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM payments WHERE till_id=? AND method='cash'").get(r.id).n;const refunded=db.prepare("SELECT COALESCE(SUM(r.amount),0) n FROM refunds r JOIN payments p ON p.id=r.payment_id WHERE p.till_id=? AND p.method='cash'").get(r.id).n;const expected=r.data.opening+collected-refunded;return updateRecord(db,ctx,r,'closed',{...r.data,expected,counted:body.counted,variance:body.counted-expected,closedAt:now()});
+      assert(r.status==='open','Till is already closed.');assert(body.counted!==undefined,'Enter the closing cash count.');const collected=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM payments WHERE till_id=? AND method='cash'").get(r.id).n;const refunded=db.prepare("SELECT COALESCE(SUM(r.amount),0) n FROM refunds r JOIN payments p ON p.id=r.payment_id WHERE p.till_id=? AND p.method IN ('cash','deposit_cash')").get(r.id).n;const deposits=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM booking_deposits WHERE till_id=? AND method='cash'").get(r.id).n;const depositRefunds=db.prepare("SELECT COALESCE(SUM(m.amount),0) n FROM deposit_movements m JOIN booking_deposits d ON d.id=m.deposit_id WHERE d.till_id=? AND d.method='cash' AND m.action='refund'").get(r.id).n;const expected=r.data.opening+collected+deposits-refunded-depositRefunds;return updateRecord(db,ctx,r,'closed',{...r.data,expected,counted:body.counted,variance:body.counted-expected,closedAt:now()});
     }
     if(r.module==='settlements'&&body.action==='reconciled'){assert(r.status==='unmatched','Settlement is already reconciled.');assert(r.data.variance===0,'Resolve the payout variance before reconciliation.',409);assert(body.evidence?.trim(),'Statement evidence is required.');return updateRecord(db,ctx,r,'reconciled',{...r.data,evidence:body.evidence});}
     if(r.module==='bills'){
@@ -238,7 +241,9 @@ export function recordAction(db,ctx,recordId,input) {
     if(r.module==='deliveries'&&body.action==='dispatched'){const order=orderDetail(db,ctx,r.data.orderId);assert(order.status==='ready','All kitchen stations must be ready before dispatch.');assert(order.lines.every(l=>l.packed===l.quantity),'Complete the packing checklist before dispatch.',409);db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
     if(r.module==='deliveries'&&body.action==='delivered')assert(body.evidence?.trim(),'Delivery acceptance evidence is required.');
     const index=cfg.states.indexOf(r.status),target=cfg.states.indexOf(body.action);
-    const special=(r.module==='subscriptions'&&((r.status==='active'&&body.action==='paused')||(r.status==='paused'&&body.action==='active')||body.action==='cancelled'))||(r.module==='reservations'&&['cancelled','no_show'].includes(body.action))||(r.module==='leave'&&body.action==='rejected')||(r.module==='deliveries'&&body.action==='failed');
+    if(r.module==='reservations'&&body.action==='seated'){assert(r.status==='confirmed','Only confirmed reservations can be seated.',409);const group=seatingGroup(db,ctx,r.data.tableId);assert(r.data.partySize<=group.capacity,'Party exceeds current table capacity.');const end=arrivalTime(r.data.endsAt);assert(end>now(),'The booked departure has passed. Create a new booking window.',409);seatAvailable(db,ctx,group,now(),end,r.id);}
+    if(r.module==='reservations'){assert((r.status==='confirmed'&&['seated','cancelled','no_show'].includes(body.action))||(r.status==='seated'&&['completed','cancelled'].includes(body.action)),'This reservation transition is not allowed.',409);}
+    const special=(r.module==='subscriptions'&&((r.status==='active'&&body.action==='paused')||(r.status==='paused'&&body.action==='active')||body.action==='cancelled'))||(r.module==='reservations'&&((body.action==='cancelled'&&['confirmed','seated'].includes(r.status))||(body.action==='no_show'&&r.status==='confirmed')))||(r.module==='leave'&&body.action==='rejected')||(r.module==='deliveries'&&body.action==='failed');
     assert(target>=0&&(target===index+1||special),`Cannot change ${r.status.replaceAll('_',' ')} to ${body.action.replaceAll('_',' ')}.`,409);
     return updateRecord(db,ctx,r,body.action,{...r.data,...(body.evidence?{evidence:body.evidence}:{}),...(body.reason?{actionReason:body.reason}:{}),...(r.module==='shifts'?{[body.action==='clocked_in'?'clockIn':'clockOut']:now()}: {})});
   });
