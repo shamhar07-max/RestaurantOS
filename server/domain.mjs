@@ -52,10 +52,21 @@ function consumeLine(db,ctx,line,origin,type='sale') {
 }
 export function menu(db,ctx) {
   const stock=new Map(inventory(db,ctx).map(i=>[i.id,i]));
-  return db.prepare('SELECT * FROM menu WHERE tenant_id=? AND outlet_id=? ORDER BY category,name').all(ctx.tenantId,ctx.outletId).filter(r=>!db.prepare('SELECT item_id FROM menu_combos WHERE item_id=?').get(r.id)).map(r=>{
-    const recipe=JSON.parse(r.recipe),modifiers=JSON.parse(r.modifiers);
-    return {...r,recipe,modifiers,allergens:JSON.parse(r.allergens),estimatedCost:recipe.reduce((s,l)=>s+l.quantity*(stock.get(l.ingredientId)?.unit_cost||0),0),stockAvailable:recipe.every(l=>(stock.get(l.ingredientId)?.available||0)>=l.quantity)};
+  const rows=db.prepare('SELECT * FROM menu WHERE tenant_id=? AND outlet_id=? ORDER BY category,name').all(ctx.tenantId,ctx.outletId);
+  const mapped=rows.map(r=>{
+    let recipe=JSON.parse(r.recipe),modifiers=JSON.parse(r.modifiers),configurationError='',components=null;
+    const combo=db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(r.id);
+    const variant=db.prepare('SELECT v.*,m.name parent_name FROM menu_variants v JOIN menu m ON m.id=v.parent_id WHERE variant_id=?').get(r.id);
+    const dependencies={[r.id]:r.version};
+    if(combo){
+      components=JSON.parse(combo.components).map(c=>{const child=rows.find(x=>x.id===c.itemId);if(child)dependencies[child.id]=child.version;return {...c,name:child?.name||c.itemId,station:child?.station||'',modifierNames:JSON.parse(child?.modifiers||'[]').filter(m=>c.modifierIds.includes(m.id)).map(m=>m.name)};});
+      try{const lines=snapshotItems(db,ctx,components.map(c=>({...c,modifierIds:c.modifierIds,quantity:c.quantity})));components=components.map((c,i)=>({...c,name:lines[i].item.name}));const aggregate=new Map();for(const l of lines)for(const i of l.recipe)aggregate.set(i.ingredientId,(aggregate.get(i.ingredientId)||0)+i.quantity*l.quantity);recipe=[...aggregate].map(([ingredientId,quantity])=>({ingredientId,quantity}));}catch(e){configurationError=e.message;recipe=[];}
+    }
+    return {...r,prep_minutes:components?Math.max(...components.map(c=>rows.find(x=>x.id===c.itemId)?.prep_minutes||r.prep_minutes)):r.prep_minutes,name:variant?variant.parent_name+' · '+variant.label:r.name,variantParentId:variant?.parent_id||null,variantLabel:variant?.label||null,recipe,modifiers,combo:components,configurationError,dependencyVersions:dependencies,
+      allergens:[...new Set(recipe.flatMap(i=>stock.get(i.ingredientId)?.allergens||[]))],
+      estimatedCost:recipe.reduce((sum,l)=>sum+l.quantity*(stock.get(l.ingredientId)?.unit_cost||0),0),stockAvailable:!configurationError&&recipe.every(l=>(stock.get(l.ingredientId)?.available||0)>=l.quantity)};
   });
+  return mapped.map(r=>({...r,variants:mapped.filter(x=>x.variantParentId===r.id).map(({variants,...v})=>v)}));
 }
 export function orderDetail(db,ctx,orderId) {
   const order=scoped(db,'orders',ctx,orderId);assert(order,'Order not found in this outlet.',404);
@@ -67,7 +78,7 @@ export function orderDetail(db,ctx,orderId) {
 export function orders(db,ctx) {return db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? ORDER BY created_at DESC LIMIT 300').all(ctx.tenantId,ctx.outletId).map(o=>orderDetail(db,ctx,o.id));}
 function snapshotItems(db,ctx,lines){
   return lines.map(l=>{
-      const item=scoped(db,'menu',ctx,l.itemId);assert(item,'Menu item is not mapped to this outlet. Import rejected; correct channel mapping.',404);assert(item.available,'This menu item is sold out.',409);
+      let item=scoped(db,'menu',ctx,l.itemId);assert(item,'Menu item is not mapped to this outlet. Import rejected; correct channel mapping.',404);assert(item.available,'This menu item is sold out.',409);const variant=db.prepare('SELECT v.label,m.name FROM menu_variants v JOIN menu m ON m.id=v.parent_id WHERE variant_id=?').get(item.id);if(variant)item={...item,name:variant.name+' · '+variant.label};
       const modifierOptions=JSON.parse(item.modifiers);assert(new Set(l.modifierIds).size===l.modifierIds.length,'A modifier cannot be selected twice.');
       const selected=l.modifierIds.map(mid=>{const m=modifierOptions.find(m=>m.id===mid);assert(m,'Invalid modifier selection.');return m;});
       const groups=new Map(modifierOptions.filter(m=>m.group).map(m=>[m.group.id,m.group]));
@@ -99,10 +110,11 @@ function snapshotLines(db,ctx,lines){
 function saveBundle(db,lineId,line){if(line.bundle)db.prepare('INSERT INTO bundle_lines VALUES(?,?,?,?,?)').run(lineId,line.bundle.key,line.bundle.itemId,line.bundle.name,line.bundle.version);}
 export function createOrder(db,ctx,input) {
   permit(ctx,'orders','create');
-  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)})).min(1).max(100)}).parse(input);
+  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,expectedVersions:z.record(z.string(),positive).optional(),discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)})).min(1).max(100)}).parse(input);
   return transaction(db,()=>{
     const previous=db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(previous)return orderDetail(db,ctx,previous.id);
     if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);body.tableId=seatingGroup(db,ctx,body.tableId).rootId;}
+    if(body.expectedVersions)for(const l of body.lines){const ids=[l.itemId,...JSON.parse(db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(l.itemId)?.components||'[]').map(c=>c.itemId)];for(const mid of ids){const current=scoped(db,'menu',ctx,mid);assert(current&&body.expectedVersions[mid]===current.version,'A selected menu item or combo component changed. Refresh and review the basket before acceptance.',409);}}
     const snapshots=snapshotLines(db,ctx,body.lines);
     const gross=snapshots.reduce((s,l)=>s+l.unitPrice*l.quantity,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000,'Order total exceeds the supported limit.');assert(body.discount<gross,'Discount must be less than the sale total.');
     const approval=body.discount?enforceApproval(db,ctx,'discount',body.discount,gross):null;

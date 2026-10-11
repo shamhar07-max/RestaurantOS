@@ -1,11 +1,12 @@
 import {z} from 'zod';
 import {assert,permit} from './domain.mjs';
-import {transaction,audit} from './db.mjs';
+import {transaction,audit,id} from './db.mjs';
 export function configureCombo(db,ctx,itemId,input){
   permit(ctx,'menu');
   const b=z.object({version:z.number().int().positive(),components:z.array(z.object({itemId:z.string(),quantity:z.number().int().min(1).max(20),modifierIds:z.array(z.string()).max(20).default([])})).min(1).max(20)}).parse(input);
   return transaction(db,()=>{
     const item=db.prepare('SELECT * FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(itemId,ctx.tenantId,ctx.outletId);assert(item,'Menu item not found.',404);assert(item.version===b.version,'Menu changed. Refresh before editing.',409);
+    assert(!db.prepare('SELECT variant_id FROM menu_variants WHERE variant_id=? OR parent_id=?').get(itemId,itemId),'A variant family cannot become a combo.',409);
     assert(b.components.reduce((s,c)=>s+c.quantity,0)<=20,'A combo supports at most 20 component units.');
     assert(!db.prepare('SELECT components FROM menu_combos').all().some(r=>JSON.parse(r.components).some(c=>c.itemId===itemId)),'An existing combo component cannot become a combo.',409);
     for(const c of b.components){assert(c.itemId!==itemId,'A combo cannot contain itself.');const child=db.prepare('SELECT * FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(c.itemId,ctx.tenantId,ctx.outletId);assert(child,'Component is not in this outlet.',404);assert(!db.prepare('SELECT item_id FROM menu_combos WHERE item_id=?').get(c.itemId),'Nested combos are not supported.');assert(child.price>0,'Component prices must be positive.');const options=JSON.parse(child.modifiers);assert(new Set(c.modifierIds).size===c.modifierIds.length,'Duplicate component modifier.');const chosen=c.modifierIds.map(mid=>{const m=options.find(x=>x.id===mid);assert(m,'Unknown component modifier.');return m;});for(const g of new Map(options.filter(m=>m.group).map(m=>[m.group.id,m.group])).values()){const count=chosen.filter(m=>m.group?.id===g.id).length;assert(count>=(g.min||0)&&count<=g.max,'Component modifier group selection is invalid.');}}
@@ -14,4 +15,28 @@ export function configureCombo(db,ctx,itemId,input){
     audit(db,ctx,'menu.combo_configured',item.id,{version:item.version+1,components:b.components});return {ok:true,version:item.version+1};
   });
 }
-export function mountCatalogue(app,db){app.get('/api/menu/:id/combo',(req,res)=>{permit(req.ctx,'menu','read');const item=db.prepare('SELECT id,name,price,version,available FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(req.params.id,req.ctx.tenantId,req.ctx.outletId);assert(item,'Menu item not found.',404);const configuration=db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(item.id);res.json({...item,components:configuration?JSON.parse(configuration.components):null});});app.post('/api/menu/:id/combo',(req,res)=>res.json(configureCombo(db,req.ctx,req.params.id,req.body)));}
+export function linkVariant(db,ctx,parentId,input){
+  permit(ctx,'menu');const b=z.object({version:z.number().int().positive(),variantId:z.string(),variantVersion:z.number().int().positive(),label:z.string().trim().min(1).max(80),remove:z.boolean().default(false)}).parse(input);
+  return transaction(db,()=>{
+    const find=itemId=>db.prepare('SELECT * FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(itemId,ctx.tenantId,ctx.outletId);
+    const parent=find(parentId),child=find(b.variantId);assert(parent&&child,'Both items must belong to this outlet.',404);assert(parent.version===b.version&&child.version===b.variantVersion,'Menu changed. Refresh before editing.',409);assert(parent.id!==child.id,'An item cannot be its own variant.');
+    if(b.remove){assert(db.prepare('SELECT variant_id FROM menu_variants WHERE parent_id=? AND variant_id=?').get(parent.id,child.id),'Variant is not in this family.',404);db.prepare('DELETE FROM menu_variants WHERE variant_id=?').run(child.id);}
+    else {
+      assert(!db.prepare('SELECT item_id FROM menu_combos WHERE item_id IN (?,?)').get(parent.id,child.id),'Combos cannot be variant families or variants.');
+      assert(!db.prepare('SELECT variant_id FROM menu_variants WHERE variant_id=? OR parent_id=?').get(parent.id,child.id),'Nested variant families are not supported.');
+      const existing=db.prepare('SELECT parent_id FROM menu_variants WHERE variant_id=?').get(child.id);assert(!existing||existing.parent_id===parent.id,'This variant already belongs to another family.',409);
+      assert(!db.prepare('SELECT variant_id FROM menu_variants WHERE parent_id=? AND label=? COLLATE NOCASE AND variant_id<>?').get(parent.id,b.label,child.id),'Variant labels must be unique within the family.');
+      db.prepare('INSERT INTO menu_variants VALUES(?,?,?) ON CONFLICT(variant_id) DO UPDATE SET label=excluded.label').run(child.id,parent.id,b.label);
+    }
+    db.prepare('UPDATE menu SET version=version+1 WHERE id IN (?,?)').run(parent.id,child.id);audit(db,ctx,b.remove?'menu.variant_unlinked':'menu.variant_linked',parent.id,{variantId:child.id,label:b.label});return {ok:true};
+  });
+}
+export function createCombo(db,ctx,input){
+  permit(ctx,'menu');const b=z.object({name:z.string().trim().min(1).max(200),category:z.string().trim().min(1).max(100),price:z.number().int().positive().max(100_000_000),description:z.string().max(1000).default(''),components:z.array(z.object({itemId:z.string(),quantity:z.number().int().min(1).max(20),modifierIds:z.array(z.string()).max(20).default([])})).min(1).max(20)}).parse(input);
+  return transaction(db,()=>{
+    const first=db.prepare('SELECT station,prep_minutes FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(b.components[0].itemId,ctx.tenantId,ctx.outletId);assert(first,'Component is not in this outlet.',404);const mid=id('item');
+    db.prepare('INSERT INTO menu VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(mid,ctx.tenantId,ctx.outletId,b.name,'',b.category,b.price,first.station,first.prep_minutes,1,1,'[]','[]','[]',b.description);
+    configureCombo(db,ctx,mid,{version:1,components:b.components});audit(db,ctx,'menu.combo_created',mid,{name:b.name});return {id:mid};
+  });
+}
+export function mountCatalogue(app,db){app.post('/api/catalogue/combos',(req,res)=>res.status(201).json(createCombo(db,req.ctx,req.body)));app.post('/api/menu/:id/variants',(req,res)=>res.json(linkVariant(db,req.ctx,req.params.id,req.body)));app.get('/api/menu/:id/combo',(req,res)=>{permit(req.ctx,'menu','read');const item=db.prepare('SELECT id,name,price,version,available FROM menu WHERE id=? AND tenant_id=? AND outlet_id=?').get(req.params.id,req.ctx.tenantId,req.ctx.outletId);assert(item,'Menu item not found.',404);const configuration=db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(item.id);res.json({...item,components:configuration?JSON.parse(configuration.components):null});});app.post('/api/menu/:id/combo',(req,res)=>res.json(configureCombo(db,req.ctx,req.params.id,req.body)));}
