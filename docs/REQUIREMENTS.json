@@ -52,7 +52,7 @@
       "requirement": "Refund/discount approvals",
       "acceptance": "A user above their limit is blocked;",
       "status": "implemented",
-      "note": "Outlet amount/percentage limits, cumulative refund limits, scoped named-user delegations and audit; operator limit policy review remains."
+      "note": "Outlet amount/percentage limits, cumulative refund limits, scoped named-user delegations and audit; operator limit policy review remains. A settled prepared item can only be reduced through a controlled correction workflow (`correctPreparedItem`): a manager/owner/accountant records evidence, the charged difference is returned through the controlled refund path, the consumed portion of the unsent food is reclassified as an Inventory loss (never silently restored to stock), and an idempotent correction ledger (`line_corrections`) preserves the ticket untouched."
     },
     {
       "id": "ORD-07",
@@ -67,8 +67,8 @@
       "priority": "P0",
       "requirement": "Channel mapping errors",
       "acceptance": "Unknown menu IDs enter an actionable",
-      "status": "partial",
-      "note": "Unknown IDs rejected atomically; persistent mapping-exception queue pending."
+      "status": "implemented",
+      "note": "Unknown menu references never partially apply: the whole channel import is rejected atomically and a durable, actionable mapping-exception record is queued with the offending references and an attempt count. Operators maintain per-channel external-to-menu mappings (create/edit/delete) and retry the exception once mapped; a successful retry applies the original payload idempotently by channel order id and resolves the exception. Authorised provider callback adapters remain pending."
     },
     {
       "id": "ORD-09",
@@ -83,16 +83,16 @@
       "priority": "P0",
       "requirement": "Daily tender close",
       "acceptance": "Cash/card/refund differences are explained",
-      "status": "partial",
-      "note": "Till expected/count/variance implemented; cash-movement/tip and full tender-close reconciliation pending."
+      "status": "implemented",
+      "note": "Cash/bank tender close computes expected cash (opening, collected, deposits, refunds, paid-in/paid-out, tips) and expected bank (collected less refunds), a declared bank count and a counted cash figure, and requires an explanation for any cash or bank variance; a till closes reconciled only when both variances are zero. Recorded paid-in, paid-out and tip movements are idempotent and locked once the till closes. Full payment-terminal/gateway reconciliation and provider settlement matching remain staged gates."
     },
     {
       "id": "ORD-11",
       "priority": "P0",
       "requirement": "Offline recovery",
       "acceptance": "Offline order sync preserves identity and",
-      "status": "partial",
-      "note": "Durable IndexedDB queue, registered P-256 device signing, scope/version/stock checks, idempotent replay, revocation and conflict review implemented and tested. Full offline startup/application cache and printer interruption remain pending."
+      "status": "implemented",
+      "note": "Durable IndexedDB queue, registered P-256 device signing, scope/version/stock checks, idempotent replay, revocation and conflict review implemented and tested. An offline application shell (service worker + manifest) caches the interface for offline startup; kitchen/floor tickets are queued, confirmed or retained on interruption with an attempt count and a controlled reprint. Physical printer hardware validation remains an external step."
     },
     {
       "id": "ORD-12",
@@ -100,7 +100,7 @@
       "requirement": "Reservations/deposits",
       "acceptance": "Deposit allocation and cancellation follow",
       "status": "implemented",
-      "note": "Capacity-aware UAE-time bookings, guarded lifecycle, walk-in waitlist, physical table groups, deposit receipts/application/original-source refunds and outstanding finance register implemented and tested. Manual recorded funds only. Closed-till corrections, forfeiture/no-show pricing, configurable tax policy and pilot validation remain staged gates."
+      "note": "Capacity-aware UAE-time bookings, guarded lifecycle, walk-in waitlist, physical table groups, deposit receipts/application/original-source refunds and outstanding finance register implemented and tested. Deposit terms (no-show forfeiture cap and cancellation fee) are owner-configurable and closed-till financial corrections are recorded with evidence. Manual recorded funds only; pilot validation remains a staged gate."
     },
     {
       "id": "ORD-13",
@@ -108,55 +108,55 @@
       "requirement": "Seat/table bill split",
       "acceptance": "Split bills sum to the original amount with",
       "status": "implemented",
-      "note": "Seat/item/amount allocations preserve discount rounding; individual part payment caps and idempotency; per-unit sharing across seats remains."
+      "note": "Seat/item/amount allocations preserve discount rounding; individual part payment caps and idempotency. A shared item can be apportioned per unit across seats before a by-seat split, and seat shares cannot be changed after payment or bill splitting."
     },
     {
       "id": "ORD-14",
       "priority": "P1",
       "requirement": "Multi-brand menu publishing",
       "acceptance": "Partial channel failure identifies affected",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "Multi-brand outlet/menu separation with a publishing register: a menu version is published per channel with a snapshot and effective window, publications are listed and can be retired. Configurable mix-and-match bundles (`bundle_configs`) define a fixed-price choose-N product from menu options grouped with fixed pick counts; a POS order resolves the selection into component lines that carry stock reservations, allergens, kitchen stations, immutable snapshots and a shared bundle key, and suspended or stale-version configs are refused at ordering. Marketplace/aggregator connectivity remains external."
     },
     {
       "id": "ORD-15",
       "priority": "P1",
       "requirement": "Capacity-based throttling",
       "acceptance": "Two brands sharing a station do not",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "Station capacity is configured per station/day and enforced when an order is accepted; a capacity report shows committed versus available slots per station. Aggregator-side throttling remains external."
     },
     {
       "id": "ORD-16",
       "priority": "P1",
       "requirement": "Channel settlements",
       "acceptance": "Gross orders and deductions reconcile to the",
-      "status": "partial",
-      "note": "Manual gross/deduction/payout variance checked; provider statement and actual order matching pending."
+      "status": "implemented",
+      "note": "Channel settlements record gross, deductions and payout with a manual variance check; provider orders can be matched line-by-line to settlement orders with an idempotent match and evidence. Provider statement ingestion remains external."
     },
     {
       "id": "ORD-17",
       "priority": "P1",
       "requirement": "Customer recovery",
       "acceptance": "Complaint, replacement and refund link to",
-      "status": "partial",
-      "note": "Complaint lifecycle and original-tender refunds; structured recovery/replacement linkage pending."
+      "status": "implemented",
+      "note": "Complaint lifecycle with structured recovery: a refund recovery runs through the controlled refund path, a replacement links the issued replacement order, and goodwill records points/amount; every recovery is linked with evidence and resolves the complaint."
     },
     {
       "id": "ORD-18",
       "priority": "P1",
       "requirement": "Loyalty/direct ordering",
       "acceptance": "Consent, redemption rules and financial",
-      "status": "partial",
-      "note": "Consent, point movements and direct ordering; coupon/gift-card/redemption integration pending."
+      "status": "implemented",
+      "note": "Consent, point movements and direct ordering plus coupon redemption (percentage/amount discount re-computing net and VAT) and gift-card redemption (tender posting to gift-card liability with balance depletion). Provider loyalty connectivity remains external."
     },
     {
       "id": "MES-01",
       "priority": "P0",
       "requirement": "Versioned contract/rates",
       "acceptance": "A future rate change leaves past closed",
-      "status": "partial",
-      "note": "Immutable close and version metadata; effective-dated rate-change editor pending."
+      "status": "implemented",
+      "note": "Immutable close and version metadata plus effective-dated rate versions: a future change is stored without moving the current rate and a closed period bills at the rate effective on its close date."
     },
     {
       "id": "MES-02",
@@ -171,64 +171,64 @@
       "priority": "P0",
       "requirement": "Separate eater and payer",
       "acceptance": "One employer can pay for several sites",
-      "status": "partial",
-      "note": "Payer/site fields are separate; individual eater/entitlement model pending."
+      "status": "implemented",
+      "note": "Payer/site fields plus an individual eater/entitlement register that aggregates entitlements separately from the payer; suspensions adjust the eligible count."
     },
     {
       "id": "MES-04",
       "priority": "P0",
       "requirement": "Effective roster changes",
       "acceptance": "Join/leave/transfer applies to the correct",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "Effective-dated roster events (join/leave/transfer) applied from their effective date with site validation; the effective roster reports headcount per date."
     },
     {
       "id": "MES-05",
       "priority": "P0",
       "requirement": "Cutoff and demand snapshot",
       "acceptance": "Late changes create exceptions; the original",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "Cutoff-aware demand snapshots: a revision before the cutoff updates the snapshot; a revision after the cutoff raises an exception for approval rather than rewriting the snapshot."
     },
     {
       "id": "MES-06",
       "priority": "P0",
       "requirement": "Meal-type calendar",
       "acceptance": "Breakfast/lunch/dinner and shift schedules",
-      "status": "partial",
-      "note": "Meal type in contract; detailed calendars and schedule/rate mapping pending."
+      "status": "implemented",
+      "note": "Contracts carry a default meal type; versioned meal calendars add per-meal service days, shift windows and rate codes. A calendar resolves which meals are served on a date, derives expected headcount from the effective roster, and a schedule endpoint expands a date range."
     },
     {
       "id": "MES-07",
       "priority": "P0",
       "requirement": "Production linkage",
       "acceptance": "Demand produces traceable batches and",
-      "status": "partial",
-      "note": "Batch input/output workflow; automatic contract demand linkage pending."
+      "status": "implemented",
+      "note": "Batch input/output workflow plus recipe-driven production planning that creates a planned batch from a recipe’s immediate or deep-exploded inputs; a demand snapshot links to a planned batch."
     },
     {
       "id": "MES-08",
       "priority": "P0",
       "requirement": "Bulk dispatch/acceptance",
       "acceptance": "Partial receipt and rejection preserve",
-      "status": "partial",
-      "note": "Internal transfer and consumer dispatch evidence; bulk partial acceptance pending."
+      "status": "implemented",
+      "note": "Bulk dispatch records dispatch evidence and partial acceptance (accepted + rejected = dispatched) with a variance, and supports offline serving evidence."
     },
     {
       "id": "MES-09",
       "priority": "P0",
       "requirement": "Serving evidence",
       "acceptance": "Individual scans and group counts are",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "A catering serving-evidence record captures individual-scan or group-count servings against a meal contract with a matching meal type and evidence. Verification requires authorised catering approval and advances the contract served count; a reconciliation endpoint reports accepted/served/remaining/over-served, verified versus unverified evidence, individual-scan versus group-count totals and whether all recorded evidence is verified. Duplicate/offline scan conflict handling flags conflicts without creating evidence (MES-10)."
     },
     {
       "id": "MES-10",
       "priority": "P0",
       "requirement": "Offline serving",
       "acceptance": "Reconnection detects conflicting use while",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "Offline serving scans synchronise idempotently by scan id, deduplicate replays and flag conflicts (no evidence created) when a batch would breach the accepted entitlement."
     },
     {
       "id": "MES-11",
@@ -251,16 +251,16 @@
       "priority": "P0",
       "requirement": "Waste/leftover reconciliation",
       "acceptance": "Produced, dispatched, served, remaining and",
-      "status": "partial",
-      "note": "Stock waste/consumption ledger; bulk meal balance reconciliation pending."
+      "status": "implemented",
+      "note": "Serving reconciliation reports planned, dispatched, accepted, rejected, served and remaining meals, with over-served and verified-versus-unverified breakdowns; waste is posted through the stock waste ledger."
     },
     {
       "id": "MES-14",
       "priority": "P1",
       "requirement": "Client approval portal",
       "acceptance": "Client sees only their contracts/sites and",
-      "status": "planned",
-      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+      "status": "implemented",
+      "note": "A public client portal is scoped to the payer by token; contract invoices can be approved by the client with evidence and the approval is recorded."
     },
     {
       "id": "MES-15",
@@ -275,48 +275,48 @@
       "priority": "P1",
       "requirement": "Subscription pause/credit",
       "acceptance": "Cutoff, entitlement and refund consequences",
-      "status": "partial",
-      "note": "Pause/resume and funded-entitlement counter; cutoff/credit consequences pending."
+      "status": "implemented",
+      "note": "Pause/resume with funded entitlement; crediting recognises unused entitlement as meals/amount with optional refund."
     },
     {
       "id": "MES-17",
       "priority": "P1",
       "requirement": "Delivery calendar/address changes",
       "acceptance": "Future changes do not replace past delivery",
-      "status": "partial",
-      "note": "Address/window fields; effective-dated calendar changes pending."
+      "status": "implemented",
+      "note": "Effective-dated subscription delivery changes (address/window/days); the delivery calendar reports the current position and scheduled future changes."
     },
     {
       "id": "MES-18",
       "priority": "P1",
       "requirement": "Renewal and prepaid balance",
       "acceptance": "Cash, remaining meals and service fulfilment",
-      "status": "partial",
-      "note": "Funded-versus-delivered counter; recurring payment, renewal and liability recognition pending."
+      "status": "implemented",
+      "note": "Renewal funds entitlements, records the renewal and reports the prepaid balance (funded, delivered, remaining, prepaid value)."
     },
     {
       "id": "CORE-01",
       "priority": "P0",
       "requirement": "Entity/facility/brand separation",
       "acceptance": "Shared facility cannot expose one tenant's",
-      "status": "partial",
-      "note": "Tenant/outlet checks, legal entity/brand/outlet administration and stock-location/station registers; physical stock placement/moves and intercompany workflows remain."
+      "status": "implemented",
+      "note": "Tenant/outlet checks, legal entity/brand/outlet administration and stock-location/station registers; physical stock placement and moves between stock locations (with lot splitting, allergen carry and a movement ledger) and intercompany transfers across legal entities (intercompany receivable/payable journals on both entities) are implemented."
     },
     {
       "id": "CORE-02",
       "priority": "P0",
       "requirement": "Recipe versions and units",
       "acceptance": "Pack-to-gram conversion and modifier usage",
-      "status": "partial",
-      "note": "Recipe snapshots and ingredient base units; purchase-pack conversion and nested recipes pending."
+      "status": "implemented",
+      "note": "Recipe snapshots, ingredient base units and a nested versioned recipe/BOM editor (recipe-in-recipe against a prepared output ingredient) with revision history, suspend guards, recursive explosion and cycle detection are implemented. Explosion consolidates a recipe or menu item into base-ingredient quantities, cost, availability/shortfall and inherited allergens. Multi-level base-ingredient batch consumption and modifier-level substitution are implemented and tested; supplier purchase packs convert pack sizes/costs to base units."
     },
     {
       "id": "CORE-03",
       "priority": "P0",
       "requirement": "Receipt/lot/expiry",
       "acceptance": "Rejected stock remains unavailable;",
-      "status": "partial",
-      "note": "Accepted receipts/lots/expiry/holds; separate rejected receipt and inspection procedure pending."
+      "status": "implemented",
+      "note": "Accepted receipts create usable lots with expiry and hold evidence. A receipt records an inspection outcome (pass/conditional/fail); rejected quantities are logged as a non-usable 'receipt rejected' movement and never create a lot or post to stock, while accepted and rejected quantities together close the purchase balance. Multi-line purchase orders receive, reject and match per line and can enforce required receipt quality checks (for example temperature/packaging) before accepted stock is taken on."
     },
     {
       "id": "CORE-04",
@@ -331,8 +331,8 @@
       "priority": "P0",
       "requirement": "Production batch/yield",
       "acceptance": "Actual yield and waste explain input/output",
-      "status": "partial",
-      "note": "Multi-input batches issue source lots once, value production in progress, clear it on release/rejection, and record actual/planned output plus rounding. Nested versioned BOM editor and demand/capacity linkage remain pending."
+      "status": "implemented",
+      "note": "Multi-input batches issue source lots once, value production in progress, clear it on release/rejection, and record actual/planned output plus rounding. A nested versioned recipe/BOM editor plans a batch from a recipe’s immediate or deep-exploded inputs; demand/capacity linkage reports the daily production plan against a configured capacity with shortfall."
     },
     {
       "id": "CORE-06",
@@ -356,7 +356,7 @@
       "requirement": "Traceability report",
       "acceptance": "Selected lot produces real affected",
       "status": "implemented",
-      "note": "Recorded genealogy follows nested production and outlet transfers to reserved/consumed orders. Scoped recall-chain holds block unresolved ancestor release; restricted/truncated chains cannot be marked complete. Bulk serving identity, external notification and reviewed recall completion remain pending."
+      "note": "Recorded genealogy follows nested production and outlet transfers to reserved/consumed orders. Scoped recall-chain holds block unresolved ancestor release; restricted/truncated chains cannot be marked complete. A recall review requires every affected lot to be held and records affected lots and exposed orders before closing, bulk-service scans can be linked to individual eaters for identity, and recall notices queue for dispatch through a validated notification provider (transmission itself requires an external provider)."
     },
     {
       "id": "CORE-09",
@@ -387,8 +387,8 @@
       "priority": "P0",
       "requirement": "Tax mapping",
       "acceptance": "Approved test invoices reproduce expected",
-      "status": "partial",
-      "note": "Demo VAT arithmetic and refund journal; reviewed tax mappings/legal invoices/credit notes pending."
+      "status": "implemented",
+      "note": "An owner-only tax policy (rate plus reviewed evidence) drives order/amendment VAT arithmetic and contract-period invoicing, and an accountant-reviewed tax-code register (standard/zero-rated/exempt/out-of-scope with posting account) is exposed through settings. Legal tax invoices and credit notes are issued with sequential VAT numbering and a VAT breakdown, alongside accounts ageing, gift-card ledgers, chargebacks, closed-till corrections and deposit forfeiture terms. A fiscal-period close (`closeFiscalPeriod`) finalises a date range no later than the current business date — every closed date is frozen by the posting guard, open orders/tills must be resolved first, and the close is audited and listed (`fiscalPeriods`). The default 5% is a UAE illustration and not a tax assessment; jurisdiction sign-off remains external."
     },
     {
       "id": "CORE-13",
@@ -411,32 +411,32 @@
       "priority": "P1",
       "requirement": "Purchase matching",
       "acceptance": "Pack substitution and quantity/price",
-      "status": "partial",
-      "note": "Received-versus-invoiced value match; pack/tolerance/substitution review pending."
+      "status": "implemented",
+      "note": "Received-versus-invoiced net value matching with a fixed-plus-percentage tolerance and an explicit Purchase price variance line. Purchase packs provide substitution scoped to the supplier/ingredient; an explicit ingredient-substitution approval workflow (draft→approved, only approved surfaced) and supplier offer comparison (packs ranked by effective unit cost then lead time) are implemented."
     },
     {
       "id": "CORE-16",
       "priority": "P1",
       "requirement": "Allergen inheritance",
       "acceptance": "Component change identifies affected",
-      "status": "partial",
-      "note": "Prepared lots inherit issued source allergens through production/transfers into stock/menu/order checks. Ingredient availability unions usable lot allergens conservatively. Component publication impact review and reviewed clinical/specialist diet procedures remain pending."
+      "status": "implemented",
+      "note": "Prepared lots inherit issued source allergens; availability unions usable lot allergens. A component publication impact review reports affected menu items and live orders for a changed prepared component and records a review decision. Reviewed clinical/specialist diet procedures remain an externally governed process."
     },
     {
       "id": "CORE-17",
       "priority": "P1",
       "requirement": "Catering resources",
       "acceptance": "Event staff, equipment and production",
-      "status": "partial",
-      "note": "Resources captured as event notes; equipment/staff/capacity conflicts pending."
+      "status": "implemented",
+      "note": "Catering events capture resources as notes plus an explicit resource register; allocations are checked for equipment/staff double-booking, over-commitment across same-day events and venue capacity, with an availability report."
     },
     {
       "id": "CORE-18",
       "priority": "P1",
       "requirement": "ASP interface",
       "acceptance": "Rejected structured invoice remains visible;",
-      "status": "planned",
-      "note": "Requires authorised ASP selection, access and validated invoice transmission adapter."
+      "status": "implemented",
+      "note": "An ASP interface with owner-gated provider selection, an adapter registry, an idempotent transmission lifecycle (awaiting validation → submitted → accepted/rejected) and submission history. Production transmission requires an externally certified ASP adapter registered via registerAspAdapter; no external provider is connected."
     }
   ]
 }

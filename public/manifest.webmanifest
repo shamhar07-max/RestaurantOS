@@ -1,0 +1,9 @@
+{
+  "name": "DigitalBurj · Restaurant OS",
+  "short_name": "Restaurant OS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#4B2943",
+  "theme_color": "#4B2943",
+  "description": "Restaurant & food service operating workspace with an offline application shell."
+}

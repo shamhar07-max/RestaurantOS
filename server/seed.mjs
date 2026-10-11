@@ -38,6 +38,7 @@ export function seed(db,{demo=true,adminEmail,adminPassword}={}) {
     const rec=(module,key,status,data)=>db.prepare('INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?)').run(key,'tenant_burj','entity_burj','outlet_downtown',module,status,JSON.stringify(data),1,now(),now());
     rec('suppliers','supplier_green','approved',{name:'Green Valley Fresh',contact:'Purchasing desk',email:'supply@example.test',terms:'Net 30',leadDays:1,notes:'Synthetic supplier · produce and dairy'});
     rec('suppliers','supplier_prime','approved',{name:'Prime Foods Trading',contact:'Wholesale team',terms:'Net 14',leadDays:2,notes:'Synthetic supplier · proteins and packaging'});
+    rec('packs','pack_oat_green','active',{name:'Oat milk · 12 × 1 L',supplierId:'supplier_green',ingredientId:'oat',packSize:12000,packCost:24000,notes:'Synthetic supplier pack · 12 litres · units and cost per base unit are derived'});
     rec('purchases','purchase_demo','requested',{name:'PO-1042',supplierId:'supplier_green',ingredientId:'oat',quantity:4000,unitCost:2,deliveryDate:businessDate(),received:0,notes:'Replenish oat milk before evening service'});
     rec('staff','staff_omar','active',{name:'Omar Hassan',position:'Head chef',station:'grill',notes:'Synthetic team profile'});
     rec('staff','staff_sara','active',{name:'Sara Ahmed',position:'Floor supervisor',station:'service',notes:'Synthetic team profile'});

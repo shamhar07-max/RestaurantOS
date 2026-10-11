@@ -5,5 +5,7 @@ import '@fontsource-variable/fraunces';
 import {App} from './App';
 import {GuestApp} from './Guest';
 import './style.css';
+import {registerOfflineShell} from './offline-app';
+registerOfflineShell();
 const guest=new URLSearchParams(location.search).get('guest');
 createRoot(document.getElementById('root')!).render(<React.StrictMode>{guest?<GuestApp outletId={guest}/>:<App/>}</React.StrictMode>);

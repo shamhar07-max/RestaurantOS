@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { openDatabase } from '../server/db.mjs';
+import { seed } from '../server/seed.mjs';
+import { ensureOrganisation } from '../server/organisation.mjs';
+import { createOrder,orderDetail,taskAction,pay } from '../server/domain.mjs';
+import { correctPreparedItem,orderLineCorrections } from '../server/service.mjs';
+const fixture=()=>{const db=openDatabase(':memory:');seed(db);ensureOrganisation(db);const user=db.prepare("SELECT * FROM users WHERE id='user_owner'").get();user.outlet_ids=JSON.parse(user.outlet_ids);return {db,ctx:{user,tenantId:'tenant_burj',entityId:'entity_burj',outletId:'outlet_downtown'}};};
+
+test('Prepared-item correction reduces a settled charge, refunds the difference and never restores stock',()=>{
+  const {db,ctx}=fixture();
+  const order=createOrder(db,ctx,{service:'dine_in',tableId:'table_outlet_downtown_1',idempotencyKey:'corr-order-1',lines:[{itemId:'burger_outlet_downtown',quantity:2}]});
+  taskAction(db,ctx,order.tasks[0].id,{action:'start'});
+  const prepared=orderDetail(db,ctx,order.id);
+  assert.equal(prepared.lines[0].consumed,1);
+  pay(db,ctx,order.id,{amount:prepared.total,method:'bank_recorded',reference:'BANK-CORR-1',idempotencyKey:'pay-corr-0001'});
+  const beefAfterConsumption=db.prepare("SELECT COALESCE(SUM(CASE WHEN status='available' THEN quantity ELSE 0 END),0) n FROM lots WHERE ingredient_id='beef'").get().n;
+  const result=correctPreparedItem(db,ctx,order.id,{lineId:prepared.lines[0].id,reducedTo:1,reason:'Burger returned half-eaten',evidence:'Photo attached in incident log',idempotencyKey:'corr-key-000001'});
+  assert.equal(result.refunded,4200);
+  assert.equal(orderDetail(db,ctx,order.id).refunded,4200);
+  const corrections=orderLineCorrections(db,ctx,order.id);
+  assert.equal(corrections.length,1);
+  assert.equal(corrections[0].old_quantity,2);
+  assert.equal(corrections[0].new_quantity,1);
+  assert.equal(corrections[0].amount,4200);
+  assert.equal(db.prepare("SELECT COALESCE(SUM(CASE WHEN status='available' THEN quantity ELSE 0 END),0) n FROM lots WHERE ingredient_id='beef'").get().n,beefAfterConsumption,'A correction must never silently restore consumed stock.');
+  const correctionJournal=db.prepare("SELECT account,debit,credit FROM journal_lines jl JOIN journals j ON j.id=jl.journal_id WHERE j.type='correction'").all();
+  assert.ok(correctionJournal.some(l=>l.account==='Inventory loss'&&l.debit>0));
+  assert.ok(correctionJournal.some(l=>l.account==='Food cost'&&l.credit>0));
+  const imbalance=db.prepare('SELECT journal_id,SUM(debit-credit) net FROM journal_lines GROUP BY journal_id HAVING net!=0').all();
+  assert.deepEqual(imbalance,[]);
+  assert.equal(db.prepare('SELECT SUM(debit-credit) n FROM journal_lines').get().n,0);
+  const replay=correctPreparedItem(db,ctx,order.id,{lineId:prepared.lines[0].id,reducedTo:1,reason:'Burger returned half-eaten',evidence:'Photo attached',idempotencyKey:'corr-key-000001'});
+  assert.equal(replay.length,1);
+  assert.equal(orderLineCorrections(db,ctx,order.id).length,1,'Idempotent replay must not create a second correction.');
+  db.close();
+});
+
+test('Prepared-item corrections require a prepared and settled line and manager authority',()=>{
+  const {db,ctx}=fixture();
+  const order=createOrder(db,ctx,{service:'dine_in',tableId:'table_outlet_downtown_2',idempotencyKey:'corr-order-2',lines:[{itemId:'burger_outlet_downtown',quantity:2}]});
+  assert.throws(()=>correctPreparedItem(db,ctx,order.id,{lineId:order.lines[0].id,reducedTo:1,reason:'Nothing prepared yet',evidence:'None',idempotencyKey:'corr-key-000002'}),/was not prepared/);
+  taskAction(db,ctx,order.tasks[0].id,{action:'start'});
+  const prepared=orderDetail(db,ctx,order.id);
+  assert.throws(()=>correctPreparedItem(db,ctx,order.id,{lineId:prepared.lines[0].id,reducedTo:1,reason:'Open bill change',evidence:'None',idempotencyKey:'corr-key-000003'}),/Settle or split/);
+  assert.throws(()=>correctPreparedItem(db,ctx,order.id,{lineId:'missing-line',reducedTo:1,reason:'Nothing',evidence:'None',idempotencyKey:'corr-key-000004'}),/not found/);
+  const cashier={...ctx,user:{id:'user_demo_cashier',role:'cashier',outlet_ids:['outlet_downtown']}};
+  assert.throws(()=>correctPreparedItem(db,cashier,order.id,{lineId:prepared.lines[0].id,reducedTo:1,reason:'Cashier override',evidence:'None',idempotencyKey:'corr-key-000005'}),/manager, accountant or owner/);
+  db.close();
+});

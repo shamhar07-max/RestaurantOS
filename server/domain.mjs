@@ -7,6 +7,23 @@ import { modules,allowed } from '../shared/modules.mjs';
 export class AppError extends Error { constructor(message,status=400){super(message);this.status=status;} }
 export const assert=(condition,message,status=400)=>{if(!condition)throw new AppError(message,status);};
 export function permit(ctx,workspace,action='write') { assert(allowed(ctx.user.role,workspace,action),'Your role does not permit this action.',403); }
+export function purchaseMatchPolicy(db,ctx) {
+  const setting=db.prepare("SELECT value FROM settings WHERE tenant_id=? AND outlet_id=? AND key='purchaseMatch'").get(ctx.tenantId,ctx.outletId);
+  const value=setting?JSON.parse(setting.value):{};
+  return {toleranceFils:Number.isSafeInteger(value.toleranceFils)?value.toleranceFils:0,tolerancePercent:Number.isSafeInteger(value.tolerancePercent)?value.tolerancePercent:0};
+}
+export function taxPolicy(db,ctx) {
+  const setting=db.prepare("SELECT value FROM settings WHERE tenant_id=? AND outlet_id=? AND key='tax'").get(ctx.tenantId,ctx.outletId);
+  const value=setting?JSON.parse(setting.value):{};
+  const ratePercent=Number.isSafeInteger(value.ratePercent)&&value.ratePercent>=0&&value.ratePercent<=100?value.ratePercent:5;
+  return {ratePercent,priceBasis:'VAT inclusive',reviewed:!!value.reviewed,changedBy:value.changedBy||null,changedAt:value.changedAt||null};
+}
+export const taxFromGross=(gross,ratePercent)=>{const net=Math.round(gross/(1+ratePercent/100));return {net,tax:gross-net};};
+export function contractRateAt(contract,date){
+  const history=(contract.data.rateHistory||[]).filter(h=>h.effectiveFrom<=date).sort((a,b)=>a.effectiveFrom.localeCompare(b.effectiveFrom));
+  const applicable=history[history.length-1];
+  return applicable?{version:applicable.version,rate:applicable.rate,billingBasis:applicable.billingBasis,minimum:applicable.minimum||0}:{version:contract.data.rateVersion||1,rate:contract.data.rate,billingBasis:contract.data.billingBasis,minimum:contract.data.minimum||0};
+}
 const integer=z.number().int().safe().nonnegative();
 const positive=integer.min(1);
 const key=z.string().min(8).max(160);
@@ -94,8 +111,31 @@ function snapshotItems(db,ctx,lines){
       return {...l,item,recipe,allergens,selected,unitPrice:item.price+selected.reduce((s,m)=>s+m.price,0)};
     });
 }
+function snapshotBundle(db,ctx,l){
+  const cfg=db.prepare('SELECT * FROM bundle_configs WHERE id=? AND tenant_id=? AND outlet_id=?').get(l.bundleId,ctx.tenantId,ctx.outletId);
+  assert(cfg,'Bundle configuration not found.',404);assert(cfg.status==='active','This bundle is suspended.',409);
+  assert(l.quantity===1,'A mix-and-match bundle is ordered as one selection set.',409);
+  const groups=JSON.parse(cfg.groups);
+  assert(new Set(l.selection).size===l.selection.length,'An option cannot be picked twice.');
+  const picks=[];
+  for(const g of groups){
+    assert(g.min>=1&&g.max>=g.min,'Bundle group is misconfigured.',409);
+    const chosen=g.choices.filter(c=>l.selection.includes(c.itemId));
+    assert(chosen.length>=g.min&&chosen.length<=g.max,`${g.label}: choose ${g.min}${g.max===g.min?'':` to ${g.max}`} option(s).`);
+    picks.push(...chosen.map(c=>({...l,itemId:c.itemId,quantity:1,modifierIds:c.modifierIds||[]})));
+  }
+  const snapshots=snapshotItems(db,ctx,picks),weight=snapshots.reduce((sum,x)=>sum+x.unitPrice,0);
+  assert(Number.isSafeInteger(weight)&&weight>0&&snapshots.every(x=>Number.isSafeInteger(x.unitPrice)),'Bundle option prices exceed the supported range.');
+  assert(cfg.price>0&&cfg.price<=100_000_000,'Bundle price exceeds the supported range.');
+  const allocations=snapshots.map(x=>Number(BigInt(cfg.price)*BigInt(x.unitPrice)/BigInt(weight)));let remainder=cfg.price-allocations.reduce((a,b)=>a+b,0);
+  const priority=snapshots.map((x,i)=>({i,fraction:BigInt(cfg.price)*BigInt(x.unitPrice)%BigInt(weight)})).sort((a,b)=>a.fraction===b.fraction?a.i-b.i:a.fraction>b.fraction?-1:1);
+  for(const x of priority){if(!remainder)break;allocations[x.i]++;remainder--;}
+  const bundle={key:id('bundle'),itemId:cfg.id,name:cfg.name,version:cfg.version};
+  return snapshots.map((x,i)=>({...x,unitPrice:allocations[i],item:{...x.item,name:cfg.name+' · '+x.item.name},bundle}));
+}
 function snapshotLines(db,ctx,lines){
   const result=lines.flatMap(l=>{
+    if(l.bundleId)return snapshotBundle(db,ctx,l);
     const combo=db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(l.itemId);
     if(!combo)return snapshotItems(db,ctx,[l]);
     const parent=scoped(db,'menu',ctx,l.itemId);assert(parent,'Combo not found in this outlet.',404);assert(parent.available,'This combo is sold out.',409);
@@ -111,17 +151,32 @@ function snapshotLines(db,ctx,lines){
   assert(result.length<=100,'Combo expansion exceeds 100 item lines. Reduce the order size.');return result;
 }
 function saveBundle(db,lineId,line){if(line.bundle)db.prepare('INSERT INTO bundle_lines VALUES(?,?,?,?,?)').run(lineId,line.bundle.key,line.bundle.itemId,line.bundle.name,line.bundle.version);}
+function stationCapacity(db,ctx,station){
+  const rows=db.prepare('SELECT brand,capacity FROM station_capacity WHERE tenant_id=? AND outlet_id=? AND station=?').all(ctx.tenantId,ctx.outletId,station);
+  const shared=rows.find(r=>r.brand==='*');if(shared)return shared.capacity;
+  const brand=db.prepare('SELECT brand FROM outlets WHERE id=?').get(ctx.outletId)?.brand;
+  return rows.find(r=>r.brand===brand)?.capacity??null;
+}
+function enforceStationCapacity(db,ctx,snapshots){
+  for(const station of new Set(snapshots.map(l=>l.item.station))){
+    const capacity=stationCapacity(db,ctx,station);if(capacity===null)continue;
+    const requested=snapshots.filter(l=>l.item.station===station).reduce((s,l)=>s+l.quantity,0);
+    const load=db.prepare("SELECT COALESCE(SUM(l.quantity),0) n FROM order_lines l JOIN orders o ON o.id=l.order_id WHERE o.tenant_id=? AND o.outlet_id=? AND o.status IN ('accepted','preparing','held') AND l.station=?").get(ctx.tenantId,ctx.outletId,station).n;
+    assert(load+requested<=capacity,`Station ${station} is at capacity (${load}/${capacity}). The order is throttled; retry shortly or route it elsewhere.`,409);
+  }
+}
 export function createOrder(db,ctx,input) {
   permit(ctx,'orders','create');
-  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,expectedVersions:z.record(z.string(),positive).optional(),discount:integer.default(0),lines:z.array(z.object({itemId:z.string(),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false)})).min(1).max(100)}).parse(input);
+  const body=z.object({service:z.enum(['dine_in','takeaway','pickup','delivery','preorder','catering']),channel:z.enum(['POS','Direct','Talabat','Deliveroo','Careem']).default('POS'),tableId:z.string().optional(),customer:text.default(''),notes:text.default(''),idempotencyKey:key,expectedVersions:z.record(z.string(),positive).optional(),discount:integer.default(0),lines:z.array(z.object({itemId:z.string().default(''),quantity:positive.max(100),modifierIds:z.array(z.string()).max(20).default([]),notes:text.default(''),seat:integer.max(100).default(0),course:positive.max(20).default(1),hold:z.boolean().default(false),bundleId:z.string().max(200).optional(),selection:z.array(z.string().max(200)).max(50).default([])})).min(1).max(100)}).parse(input);
   return transaction(db,()=>{
     const previous=db.prepare('SELECT id FROM orders WHERE tenant_id=? AND outlet_id=? AND idempotency_key=?').get(ctx.tenantId,ctx.outletId,body.idempotencyKey);if(previous)return orderDetail(db,ctx,previous.id);
     if(body.service==='dine_in'){assert(body.tableId,'Select a table.');assert(scoped(db,'dining_tables',ctx,body.tableId),'Table not found.',404);body.tableId=seatingGroup(db,ctx,body.tableId).rootId;}
-    if(body.expectedVersions)for(const l of body.lines){const ids=[l.itemId,...JSON.parse(db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(l.itemId)?.components||'[]').map(c=>c.itemId)];for(const mid of ids){const current=scoped(db,'menu',ctx,mid);assert(current&&body.expectedVersions[mid]===current.version,'A selected menu item or combo component changed. Refresh and review the basket before acceptance.',409);}}
+    if(body.expectedVersions)for(const l of body.lines){const ids=l.bundleId?(l.selection||[]):[l.itemId,...JSON.parse(db.prepare('SELECT components FROM menu_combos WHERE item_id=?').get(l.itemId)?.components||'[]').map(c=>c.itemId)];for(const mid of ids){const current=scoped(db,'menu',ctx,mid);assert(current&&body.expectedVersions[mid]===current.version,'A selected menu item or combo component changed. Refresh and review the basket before acceptance.',409);}}
     const snapshots=snapshotLines(db,ctx,body.lines);
+    enforceStationCapacity(db,ctx,snapshots);
     const gross=snapshots.reduce((s,l)=>s+l.unitPrice*l.quantity,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000,'Order total exceeds the supported limit.');assert(body.discount<gross,'Discount must be less than the sale total.');
     const approval=body.discount?enforceApproval(db,ctx,'discount',body.discount,gross):null;
-    const total=gross-body.discount,net=Math.round(total/1.05),tax=total-net,oid=id('ord');
+    const total=gross-body.discount,{net,tax}=taxFromGross(total,taxPolicy(db,ctx).ratePercent),oid=id('ord');
     const number=db.prepare('SELECT COALESCE(MAX(number),1000)+1 n FROM orders WHERE tenant_id=? AND outlet_id=?').get(ctx.tenantId,ctx.outletId).n;
     db.prepare('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(oid,ctx.tenantId,ctx.entityId,ctx.outletId,businessDate(),number,body.service,body.channel,body.tableId||null,body.customer,body.notes,'accepted',total,net,tax,body.discount,body.idempotencyKey,now(),now(),1);
     db.prepare('INSERT INTO order_controls(order_id,assigned_user_id) VALUES(?,?)').run(oid,db.prepare('SELECT id FROM users WHERE id=? AND tenant_id=?').get(ctx.user.id,ctx.tenantId)?ctx.user.id:null);
@@ -207,9 +262,40 @@ export function createRecord(db,ctx,module,input) {
     if(module==='reservations'){
       const group=seatingGroup(db,ctx,data.tableId);assert(data.partySize>0&&data.partySize<=group.capacity,'Party exceeds table capacity.');data.startsAt=arrivalTime(data.startsAt);data.endsAt=arrivalTime(data.endsAt);assert(data.startsAt<data.endsAt,'Departure must follow arrival.');assert(!bookingConflict(db,ctx,group.ids,data.startsAt,data.endsAt),'This table is already reserved for that time.',409);data.tableId=group.rootId;
     }
-    if(['purchases','transfers','wastage'].includes(module))assert(data.quantity>0,'Quantity must be positive.');
-    if(module==='purchases'){assert(getRecord(db,ctx,data.supplierId).status==='approved','Supplier must be approved.');data.received=0;}
+    if(['transfers','wastage'].includes(module))assert(data.quantity>0,'Quantity must be positive.');
+    if(module==='packs'){
+      assert(getRecord(db,ctx,data.supplierId).status==='approved','Supplier must be approved.');
+      assert(data.packSize>0,'Base units per pack must be positive.');assert(data.packCost>0,'Cost per pack must be positive.');
+      assert(!db.prepare("SELECT id FROM records WHERE tenant_id=? AND module='packs' AND json_extract(data,'$.supplierId')=? AND json_extract(data,'$.ingredientId')=? AND json_extract(data,'$.name')=?").get(ctx.tenantId,data.supplierId,data.ingredientId,data.name),'A pack with this name already exists for the supplier and ingredient.',409);
+    }
+    if(module==='purchases'){
+      assert(getRecord(db,ctx,data.supplierId).status==='approved','Supplier must be approved.');
+      if(data.packId){
+        assert(!data.quantity&&!data.unitCost,'Use either a purchase pack or a base-unit quantity and cost.');
+        const pack=getRecord(db,ctx,data.packId);assert(pack.module==='packs'&&pack.status==='active','Select an active purchase pack.');
+        assert(pack.data.supplierId===data.supplierId,'The chosen pack belongs to another supplier.');assert(pack.data.ingredientId===data.ingredientId,'The chosen pack supplies another ingredient.');
+        assert(data.packQuantity>0,'Number of packs ordered must be positive.');
+        data.quantity=data.packQuantity*pack.data.packSize;data.unitCost=Math.max(1,Math.round(pack.data.packCost/pack.data.packSize));
+        data.packName=pack.data.name;data.packSize=pack.data.packSize;data.packCost=pack.data.packCost;
+        assert(Number.isSafeInteger(data.quantity)&&data.quantity>0&&data.quantity<=100_000_000,'Pack quantity exceeds the supported range.');
+      } else assert(data.quantity>0&&data.unitCost>0,'Enter a base-unit quantity and cost, or choose a purchase pack.');
+      data.received=0;data.rejected=0;
+    }
     if(module==='batches'){assert(data.outputQuantity>0&&data.outputQuantity<=100_000_000,'Planned output must be positive and within the supported range.');const inputs=data.inputs||[{ingredientId:data.inputId,quantity:data.inputQuantity}];assert(inputs.length&&inputs.every(i=>i.ingredientId&&i.quantity>0),'Add positive ingredient quantities.');assert(new Set(inputs.map(i=>i.ingredientId)).size===inputs.length,'Batch ingredients must be unique.');for(const i of inputs){assert(i.ingredientId!==data.outputId,'Input and output must be different ingredients.');assert(db.prepare('SELECT id FROM ingredients WHERE id=? AND tenant_id=?').get(i.ingredientId,ctx.tenantId),'Batch ingredient not found.',404);}if(data.inputs){assert(!data.inputId&&!data.inputQuantity,'Use either multiple inputs or the legacy single input.');data.multiInput=true;}data.inputs=inputs;assert(data.expiry>=businessDate(),'Output expiry must not be in the past.');}
+    if(module==='tax_codes'){assert(data.ratePercent<=100,'A tax rate cannot exceed 100%.');assert(data.treatment!=='standard'||data.ratePercent>0,'A standard-rated code needs a positive rate.');assert(!db.prepare("SELECT id FROM records WHERE tenant_id=? AND outlet_id=? AND module='tax_codes' AND json_extract(data,'$.name')=?").get(ctx.tenantId,ctx.outletId,data.name),'A tax code with this name already exists.',409);}
+    if(module==='servings'){const contract=getRecord(db,ctx,data.contractId);assert(contract.module==='contracts','Serving evidence must reference a meal contract.',404);assert(contract.data.mealType===data.mealType,'Serving meal type must match the contract.',409);assert(data.quantity>0,'Record at least one meal served.');}
+    if(['eaters','roster_events','demand_snapshots','meal_calendars','dispatches','demand_exceptions'].includes(module)){const contract=getRecord(db,ctx,data.contractId);assert(contract.module==='contracts','This record must reference a meal contract.',404);}
+    if(module==='eaters')assert(data.entitlement>0,'A meal entitlement must be positive.');
+    if(module==='roster_events'){assert(data.quantity>0,'Headcount must be positive.');if(data.action==='transfer')assert(data.fromSite&&data.toSite,'A transfer needs a from and a to site.');}
+    if(module==='demand_snapshots'){const due=new Date(data.cutoffAt);assert(!Number.isNaN(due.getTime()),'Enter a valid order cutoff.');}
+    if(module==='demand_exceptions'){const demand=getRecord(db,ctx,data.demandId);assert(demand.module==='demand_snapshots','A demand exception must reference a demand snapshot.',404);assert(demand.data.contractId===data.contractId,'The demand snapshot belongs to another contract.',409);}
+    if(module==='dispatches'){assert(data.dispatched>0,'Dispatched meals must be positive.');data.accepted=data.accepted||0;data.rejected=data.rejected||0;assert(data.accepted+data.rejected<=data.dispatched,'Accepted plus rejected meals cannot exceed the dispatched quantity.');if(data.demandId){const demand=getRecord(db,ctx,data.demandId);assert(demand.module==='demand_snapshots','A dispatch must reference a demand snapshot.',404);assert(demand.data.contractId===data.contractId,'The demand snapshot belongs to another contract.',409);}}
+    if(module==='meal_calendars')assert(['draft','approved','period_closed'].includes(getRecord(db,ctx,data.contractId).status),'The contract must exist before a calendar is added.',409);
+    if(module==='subscription_changes'){const subscription=getRecord(db,ctx,data.subscriptionId);assert(subscription.module==='subscriptions','A delivery change must reference a subscription.',404);assert(data.effectiveFrom>=businessDate(),'Schedule delivery changes for today or a future date.');}
+    if(module==='coupons'){assert(data.value>0,'Coupon value must be positive.');assert(data.type!=='percent'||data.value<=100,'A percentage coupon cannot exceed 100%.');assert(Number.isSafeInteger(data.minSpend||0)&&(data.minSpend||0)>=0,'Minimum spend is invalid.');assert(!db.prepare("SELECT id FROM records WHERE tenant_id=? AND outlet_id=? AND module='coupons' AND lower(json_extract(data,'$.code'))=lower(?)").get(ctx.tenantId,ctx.outletId,data.code),'A coupon with this code already exists.',409);data.code=data.code.toUpperCase();data.redeemed=0;}
+    if(module==='gift_cards'){assert(data.initialValue>0,'Load a positive gift card value.');assert(!db.prepare("SELECT id FROM records WHERE tenant_id=? AND outlet_id=? AND module='gift_cards' AND lower(json_extract(data,'$.code'))=lower(?)").get(ctx.tenantId,ctx.outletId,data.code),'A gift card with this code already exists.',409);data.code=data.code.toUpperCase();data.balance=data.initialValue;}
+    if(module==='substitutions'){assert(data.ingredientId!==data.substituteId,'Choose a different substitute ingredient.');assert(data.quantity>0,'Substituted quantity must be positive.');}
+    if(module==='catering_resources')assert(data.quantity>0,'Resource quantity must be positive.');
     if(module==='contracts'){assert(data.rate>0,'Contract rate must be positive.');assert(data.startDate<=data.endDate,'Contract dates are invalid.');data.rateVersion=1;}
     if(module==='subscriptions'){assert(data.entitlements>0,'A subscription needs funded entitlements.');data.used=0;}
     if(module==='shifts'){assert(new Date(data.startsAt)<new Date(data.endsAt),'Shift end must follow start.');}
@@ -225,17 +311,23 @@ export function createRecord(db,ctx,module,input) {
     db.prepare('INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?)').run(rid,ctx.tenantId,ctx.entityId,ctx.outletId,module,config.states[0],JSON.stringify(data),1,stamp,stamp);audit(db,ctx,`${module}.created`,rid,{data});return getRecord(db,ctx,rid);
   });
 }
-const approvalModules=new Set(['purchases','batches','transfers','counts','wastage','catering','contracts','campaigns','leave','bills','settlements','payroll','suppliers']);
+const approvalModules=new Set(['purchases','batches','transfers','counts','wastage','catering','contracts','campaigns','leave','bills','settlements','payroll','suppliers','tax_codes','demand_exceptions','substitutions']);
 export function recordAction(db,ctx,recordId,input) {
-  const body=z.object({action:z.string().max(50),reason:text.default(''),version:positive,quantity:integer.optional(),expiry:z.string().optional(),lotCode:z.string().max(100).optional(),evidence:text.optional(),counted:integer.optional(),payment:integer.optional()}).strict().parse(input);
+  const body=z.object({action:z.string().max(50),reason:text.default(''),version:positive,quantity:integer.optional(),rejected:integer.optional(),inspection:z.enum(['pass','conditional','fail']).optional(),expiry:z.string().optional(),lotCode:z.string().max(100).optional(),evidence:text.optional(),counted:integer.optional(),declared:integer.optional(),payment:integer.optional()}).strict().parse(input);
   return transaction(db,()=>{
     const r=getRecord(db,ctx,recordId),cfg=modules[r.module];assert(cfg,'Unknown record.');permit(ctx,cfg.workspace,r.module==='payroll'?'payroll':r.module==='tills'?'till':body.action==='receive'&&r.module==='purchases'?'receive':r.module==='batches'&&['released','rejected','correct_expiry'].includes(body.action)?'release':'write');assert(r.version===body.version,'This record changed. Refresh it before acting.',409);
     const sensitive=body.action==='approved'||body.action==='matched'||body.action==='reconciled'||body.action==='period_closed';
     if(sensitive&&approvalModules.has(r.module))assert(['owner','manager','accountant','purchasing','hr'].includes(ctx.user.role),'An authorised approver is required.',403);
     if(r.module==='purchases'&&body.action==='receive'){
-      assert(['approved','part_received'].includes(r.status),'Approve the purchase before receiving.',409);assert(body.quantity>0&&body.quantity<=r.data.quantity-r.data.received,'Receipt quantity exceeds the outstanding purchase balance.');assert(body.expiry&&body.expiry>=businessDate(),'Enter a usable expiry date.');assert(body.lotCode?.trim(),'Supplier lot code is required.');assert(body.evidence?.trim(),'Receiving / inspection evidence is required.');
-      const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,ctx.outletId,r.data.ingredientId,body.lotCode,body.expiry,'available',r.data.unitCost,body.quantity,r.id);movement(db,ctx,r.data.ingredientId,lid,body.quantity,'receipt',r.id,body.evidence);
-      const cost=body.quantity*r.data.unitCost;journal(db,ctx,lid,'receipt',[{account:'Inventory',debit:cost},{account:'Goods received not invoiced',credit:cost}]);const received=r.data.received+body.quantity;return updateRecord(db,ctx,r,received===r.data.quantity?'received':'part_received',{...r.data,received});
+      assert(['approved','part_received'].includes(r.status),'Approve the purchase before receiving.',409);
+      const accepted=body.quantity||0,rejected=body.rejected||0,inspection=body.inspection||'pass';
+      assert(accepted+rejected>0,'Record an accepted or a rejected quantity.');
+      assert(accepted+rejected<=r.data.quantity-(r.data.received||0)-(r.data.rejected||0),'Receipt quantity exceeds the outstanding purchase balance.');assert(rejected===0||inspection!=='pass','A rejected quantity must record a conditional or failed inspection.');assert(body.evidence?.trim(),'Receiving / inspection evidence is required.');
+      if(accepted>0){assert(body.expiry&&body.expiry>=businessDate(),'Enter a usable expiry date for accepted stock.');assert(body.lotCode?.trim(),'Supplier lot code is required for accepted stock.');}
+      if(rejected>0)db.prepare('INSERT INTO movements VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id('mov'),ctx.tenantId,ctx.outletId,r.data.ingredientId,null,rejected,'receipt_rejected',r.id,ctx.user.id,body.evidence,now());
+      if(accepted>0){const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,ctx.outletId,r.data.ingredientId,body.lotCode,body.expiry,'available',r.data.unitCost,accepted,r.id);movement(db,ctx,r.data.ingredientId,lid,accepted,'receipt',r.id,body.evidence);const cost=accepted*r.data.unitCost;journal(db,ctx,lid,'receipt',[{account:'Inventory',debit:cost},{account:'Goods received not invoiced',credit:cost}]);}
+      const received=(r.data.received||0)+accepted,totalRejected=(r.data.rejected||0)+rejected;
+      return updateRecord(db,ctx,r,received+totalRejected>=r.data.quantity?'received':'part_received',{...r.data,received,rejected:totalRejected,lastInspection:{outcome:inspection,accepted,rejected,evidence:body.evidence,at:now()}});
     }
     if(r.module==='batches'){
       if(body.action==='correct_expiry'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety expiry review permission is required.',403);assert(['planned','executing','quality_hold'].includes(r.status),'Released or rejected batch expiry is immutable.',409);assert(body.expiry&&z.iso.date().safeParse(body.expiry).success&&body.expiry>=businessDate(),'Choose a usable output expiry.');assert(body.evidence?.trim(),'Expiry review evidence is required.');const sources=(r.data.inputLots||[]).flatMap(i=>i.lots);if(sources.length)assert(sources.every(l=>body.expiry<=l.expiry),'Reviewed expiry cannot exceed any issued input lot expiry.',409);return updateRecord(db,ctx,r,r.status,{...r.data,expiry:body.expiry,expiryReview:body.evidence});}
@@ -254,8 +346,8 @@ export function recordAction(db,ctx,recordId,input) {
       if(body.action==='rejected'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety rejection permission is required.',403);assert(['executing','quality_hold'].includes(r.status),'Only an active batch can be rejected.');assert(body.reason.trim(),'Rejection reason is required.');journal(db,ctx,r.id,'production_waste',[{account:'Wastage',debit:r.data.inputCost},{account:r.data.wipPosted?'Production in progress':'Inventory',credit:r.data.inputCost}]);return updateRecord(db,ctx,r,'rejected',{...r.data,rejectionReason:body.reason});}
     }
     if(r.module==='transfers'){
-      if(body.action==='in_transit'){assert(r.status==='planned','Transfer is already dispatched.');assert(r.data.destinationId!==ctx.outletId,'Select a different destination.');const destination=db.prepare('SELECT * FROM outlets WHERE id=? AND tenant_id=?').get(r.data.destinationId,ctx.tenantId);assert(destination.entity_id===ctx.entityId,'Intercompany transfers require a separate commercial workflow.');const lotsUsed=[];const cost=allocate(db,ctx,r.data.ingredientId,r.data.quantity,r.id,{type:'transfer_dispatch',reason:body.reason||'Branch dispatch',lotsUsed});journal(db,ctx,r.id,'transfer_dispatch',[{account:'In-transit stock',debit:cost},{account:'Inventory',credit:cost}]);return updateRecord(db,ctx,r,'in_transit',{...r.data,cost,lotsUsed,dispatchedAt:now()});}
-      if(body.action==='received'){assert(r.status==='in_transit','Only in-transit stock can be received.');assert(ctx.user.outlet_ids.includes(r.data.destinationId),'You do not have access to the receiving outlet.',403);assert(body.evidence?.trim(),'Receiving evidence is required.');const destinationCtx={...ctx,outletId:r.data.destinationId};for(const source of r.data.lotsUsed){const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,r.data.destinationId,r.data.ingredientId,`${r.data.name}/${source.code}`,source.expiry,'available',source.unitCost,source.quantity,r.id);db.prepare('INSERT INTO lot_allergens VALUES(?,?)').run(lid,JSON.stringify(source.allergens||[]));movement(db,destinationCtx,r.data.ingredientId,lid,source.quantity,'transfer_receive',r.id,body.evidence);}journal(db,ctx,r.id,'transfer_receive',[{account:'Inventory transferred out',debit:r.data.cost},{account:'In-transit stock',credit:r.data.cost}]);journal(db,destinationCtx,r.id,'transfer_receive_destination',[{account:'Inventory',debit:r.data.cost},{account:'Inventory transferred in',credit:r.data.cost}]);return updateRecord(db,ctx,r,'received',{...r.data,receivedAt:now(),evidence:body.evidence});}
+      if(body.action==='in_transit'){assert(r.status==='planned','Transfer is already dispatched.');assert(r.data.destinationId!==ctx.outletId,'Select a different destination.');const destination=db.prepare('SELECT * FROM outlets WHERE id=? AND tenant_id=?').get(r.data.destinationId,ctx.tenantId);const intercompany=destination.entity_id!==ctx.entityId;const lotsUsed=[];const cost=allocate(db,ctx,r.data.ingredientId,r.data.quantity,r.id,{type:'transfer_dispatch',reason:body.reason||'Branch dispatch',lotsUsed});journal(db,ctx,r.id,'transfer_dispatch',[{account:'In-transit stock',debit:cost},{account:'Inventory',credit:cost}]);if(intercompany){assert(body.reason&&body.reason.trim().length>=3,'Intercompany transfers require a reason and evidence.',400);const seller=db.prepare('SELECT name FROM entities WHERE id=?').get(ctx.entityId),buyer=db.prepare('SELECT name FROM entities WHERE id=?').get(destination.entity_id);journal(db,ctx,r.id,'intercompany_dispatch',[{account:'Intercompany receivable',debit:cost},{account:'Intercompany payable',credit:cost}]);audit(db,ctx,'transfer.intercompany_dispatched',r.id,{seller:seller?.name,buyer:buyer?.name,cost});}return updateRecord(db,ctx,r,'in_transit',{...r.data,cost,lotsUsed,intercompany,dispatchedAt:now()});}
+      if(body.action==='received'){assert(r.status==='in_transit','Only in-transit stock can be received.');assert(ctx.user.outlet_ids.includes(r.data.destinationId),'You do not have access to the receiving outlet.',403);assert(body.evidence?.trim(),'Receiving evidence is required.');const destination=db.prepare('SELECT * FROM outlets WHERE id=? AND tenant_id=?').get(r.data.destinationId,ctx.tenantId);const destinationCtx={...ctx,outletId:r.data.destinationId,entityId:destination.entity_id};for(const source of r.data.lotsUsed){const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,r.data.destinationId,r.data.ingredientId,`${r.data.name}/${source.code}`,source.expiry,'available',source.unitCost,source.quantity,r.id);db.prepare('INSERT INTO lot_allergens VALUES(?,?)').run(lid,JSON.stringify(source.allergens||[]));movement(db,destinationCtx,r.data.ingredientId,lid,source.quantity,'transfer_receive',r.id,body.evidence);}journal(db,ctx,r.id,'transfer_receive',[{account:'Inventory transferred out',debit:r.data.cost},{account:'In-transit stock',credit:r.data.cost}]);journal(db,destinationCtx,r.id,'transfer_receive_destination',[{account:'Inventory',debit:r.data.cost},{account:'Inventory transferred in',credit:r.data.cost}]);if(r.data.intercompany){journal(db,destinationCtx,r.id,'intercompany_receive',[{account:'Intercompany payable',debit:r.data.cost},{account:'Intercompany receivable',credit:r.data.cost}]);audit(db,destinationCtx,'transfer.intercompany_received',r.id,{cost:r.data.cost});}return updateRecord(db,ctx,r,'received',{...r.data,receivedAt:now(),evidence:body.evidence});}
     }
     if(r.module==='wastage'&&body.action==='approved'){assert(r.status==='draft','Wastage is already posted.');const cost=allocate(db,ctx,r.data.ingredientId,r.data.quantity,r.id,{type:'waste',reason:r.data.notes});journal(db,ctx,r.id,'waste',[{account:'Wastage',debit:cost},{account:'Inventory',credit:cost}]);return updateRecord(db,ctx,r,'approved',{...r.data,cost});}
     if(r.module==='counts'&&body.action==='approved'){
@@ -265,23 +357,70 @@ export function recordAction(db,ctx,recordId,input) {
       const cost=Math.abs(variance)*stock.unit_cost;if(cost)journal(db,ctx,r.id,'count',variance<0?[{account:'Stock variance',debit:cost},{account:'Inventory',credit:cost}]:[{account:'Inventory',debit:cost},{account:'Stock variance',credit:cost}]);return updateRecord(db,ctx,r,'approved',{...r.data,expected:stock.on_hand,variance});
     }
     if(r.module==='contracts'&&body.action==='period_closed'){
-      assert(r.status==='approved','Approve contract terms before closing the period.');assert(body.evidence?.trim(),'Client acceptance / authorised extras evidence is required.');const units=r.data.billingBasis==='fixed_person'?r.data.eligible:r.data.billingBasis==='fixed_site'?1:r.data.billingBasis==='guaranteed_minimum'?Math.max(r.data.minimum||0,r.data.accepted):r.data.accepted;
-      const net=units*r.data.rate,tax=Math.round(net*.05),total=net+tax;journal(db,ctx,r.id,'contract_invoice',[{account:'Receivables',debit:total},{account:'Contract sales',credit:net},{account:'Output VAT',credit:tax}]);return updateRecord(db,ctx,r,'period_closed',{...r.data,invoice:{units,net,tax,total,basis:r.data.billingBasis,rateVersion:r.data.rateVersion,issuedAt:now(),evidence:body.evidence}});
+      assert(r.status==='approved','Approve contract terms before closing the period.');assert(body.evidence?.trim(),'Client acceptance / authorised extras evidence is required.');const version=contractRateAt(r,businessDate());const units=version.billingBasis==='fixed_person'?r.data.eligible:version.billingBasis==='fixed_site'?1:version.billingBasis==='guaranteed_minimum'?Math.max(version.minimum||0,r.data.accepted):r.data.accepted;
+      const taxRate=taxPolicy(db,ctx).ratePercent,net=units*version.rate,tax=Math.round(net*taxRate/100),total=net+tax;journal(db,ctx,r.id,'contract_invoice',[{account:'Receivables',debit:total},{account:'Contract sales',credit:net},{account:'Output VAT',credit:tax}]);return updateRecord(db,ctx,r,'period_closed',{...r.data,invoice:{units,net,tax,total,basis:version.billingBasis,taxPercent:taxRate,rateVersion:version.version,issuedAt:now(),evidence:body.evidence}});
+    }
+    if(r.module==='servings'&&body.action==='verified'){
+      assert(r.status==='recorded','Serving evidence is already verified.');assert(body.evidence?.trim(),'Serving acceptance evidence is required.');assert(['owner','manager','accountant'].includes(ctx.user.role),'An authorised catering approver must verify serving evidence.',403);
+      const contract=getRecord(db,ctx,r.data.contractId);const data={...contract.data,served:(contract.data.served||0)+r.data.quantity};
+      db.prepare('UPDATE records SET data=?,version=version+1,updated_at=? WHERE id=?').run(JSON.stringify(data),now(),contract.id);audit(db,ctx,'contract.served_evidence',contract.id,{servingId:r.id,quantity:r.data.quantity,method:r.data.method,evidence:body.evidence});
+      return updateRecord(db,ctx,r,'verified',{...r.data,verifiedAt:now(),evidence:body.evidence,contractId:contract.id});
+    }
+    if(r.module==='demand_exceptions'&&(body.action==='approved'||body.action==='rejected')){
+      assert(r.status==='open','This demand exception is already decided.',409);
+      if(body.action==='approved'){
+        const demand=getRecord(db,ctx,r.data.demandId);assert(demand.module==='demand_snapshots','The demand snapshot no longer exists.',404);
+        const applied=[...(demand.data.appliedChanges||[]),{at:now(),quantity:r.data.change,previous:demand.data.quantity,reason:r.data.reason,exceptionId:r.id,approvedBy:ctx.user.name}];
+        db.prepare('UPDATE records SET data=?,version=version+1,updated_at=? WHERE id=?').run(JSON.stringify({...demand.data,quantity:r.data.change,appliedChanges:applied}),now(),demand.id);
+        audit(db,ctx,'catering.demand_exception_applied',demand.id,{exceptionId:r.id,from:demand.data.quantity,to:r.data.change});
+      }
+      return updateRecord(db,ctx,r,body.action,{...r.data,decidedAt:now(),decisionReason:body.reason});
+    }
+    if(r.module==='dispatches'&&body.action==='accepted'){
+      assert(r.status==='dispatched','Dispatch the meals before acceptance.',409);
+      assert(body.evidence?.trim(),'Acceptance evidence is required.');
+      const accepted=r.data.accepted||0,rejected=r.data.rejected||0;
+      assert(accepted+rejected===r.data.dispatched,`Accepted (${accepted}) plus rejected (${rejected}) meals must equal the dispatched quantity (${r.data.dispatched}).`);
+      return updateRecord(db,ctx,r,'accepted',{...r.data,accepted,rejected,variance:accepted-r.data.dispatched,acceptedAt:now(),acceptanceEvidence:body.evidence});
     }
     if(r.module==='subscriptions'&&body.action==='fulfil'){
       assert(r.status==='active','Only active subscriptions can be fulfilled.');assert(r.data.used<r.data.entitlements,'No funded entitlement remains.');assert(body.evidence?.trim(),'Delivery evidence is required.');audit(db,ctx,'subscription.meal_delivered',r.id,{number:r.data.used+1,evidence:body.evidence});return updateRecord(db,ctx,r,r.status,{...r.data,used:r.data.used+1});
     }
     if(r.module==='tills'&&body.action==='closed'){
-      assert(r.status==='open','Till is already closed.');assert(body.counted!==undefined,'Enter the closing cash count.');const collected=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM payments WHERE till_id=? AND method='cash'").get(r.id).n;const refunded=db.prepare("SELECT COALESCE(SUM(r.amount),0) n FROM refunds r JOIN payments p ON p.id=r.payment_id WHERE p.till_id=? AND p.method IN ('cash','deposit_cash')").get(r.id).n;const deposits=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM booking_deposits WHERE till_id=? AND method='cash'").get(r.id).n;const depositRefunds=db.prepare("SELECT COALESCE(SUM(m.amount),0) n FROM deposit_movements m JOIN booking_deposits d ON d.id=m.deposit_id WHERE d.till_id=? AND d.method='cash' AND m.action='refund'").get(r.id).n;const expected=r.data.opening+collected+deposits-refunded-depositRefunds;return updateRecord(db,ctx,r,'closed',{...r.data,expected,counted:body.counted,variance:body.counted-expected,closedAt:now()});
+      assert(r.status==='open','Till is already closed.');assert(body.counted!==undefined,'Enter the closing cash count.');
+      const collected=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM payments WHERE till_id=? AND method='cash'").get(r.id).n;
+      const refunded=db.prepare("SELECT COALESCE(SUM(rf.amount),0) n FROM refunds rf JOIN payments p ON p.id=rf.payment_id WHERE p.till_id=? AND p.method IN ('cash','deposit_cash')").get(r.id).n;
+      const deposits=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM booking_deposits WHERE till_id=? AND method='cash'").get(r.id).n;
+      const depositRefunds=db.prepare("SELECT COALESCE(SUM(m.amount),0) n FROM deposit_movements m JOIN booking_deposits d ON d.id=m.deposit_id WHERE d.till_id=? AND d.method='cash' AND m.action='refund'").get(r.id).n;
+      const moves=db.prepare('SELECT type,COALESCE(SUM(amount),0) n FROM till_movements WHERE till_id=? GROUP BY type').all(r.id),moveTotal=t=>moves.find(m=>m.type===t)?.n||0;
+      const paidIn=moveTotal('paid_in'),paidOut=moveTotal('paid_out'),tips=moveTotal('tip');
+      const expected=r.data.opening+collected+deposits+paidIn+tips-refunded-depositRefunds-paidOut;
+      const bankCollected=db.prepare("SELECT COALESCE(SUM(amount),0) n FROM payments WHERE till_id=? AND method='bank_recorded'").get(r.id).n;
+      const bankRefunded=db.prepare("SELECT COALESCE(SUM(rf.amount),0) n FROM refunds rf JOIN payments p ON p.id=rf.payment_id WHERE p.till_id=? AND p.method='bank_recorded'").get(r.id).n;
+      const expectedBank=bankCollected-bankRefunded,declared=body.declared!==undefined?body.declared:expectedBank;
+      const cashVariance=body.counted-expected,bankVariance=declared-expectedBank;
+      assert(cashVariance===0&&bankVariance===0||body.reason.trim(),'Explain the cash or card difference before closing the till.',409);
+      return updateRecord(db,ctx,r,'closed',{...r.data,cash:{opening:r.data.opening,collected,deposits,refunds:refunded,depositRefunds,paidIn,paidOut,tips,expected,counted:body.counted,variance:cashVariance},bank:{collected:bankCollected,refunds:bankRefunded,expected:expectedBank,declared,variance:bankVariance},tips,expected,counted:body.counted,variance:cashVariance,reconciled:cashVariance===0&&bankVariance===0,closedAt:now()});
     }
     if(r.module==='settlements'&&body.action==='reconciled'){assert(r.status==='unmatched','Settlement is already reconciled.');assert(r.data.variance===0,'Resolve the payout variance before reconciliation.',409);assert(body.evidence?.trim(),'Statement evidence is required.');return updateRecord(db,ctx,r,'reconciled',{...r.data,evidence:body.evidence});}
     if(r.module==='bills'){
-      if(body.action==='matched'){assert(r.status==='draft','Bill is not a draft.');const po=getRecord(db,ctx,r.data.purchaseId);const receivedCost=po.data.received*po.data.unitCost;assert(r.data.amount-(r.data.tax||0)===receivedCost,'Invoice net does not match received goods. Resolve the discrepancy.',409);assert(body.evidence?.trim(),'Matching evidence is required.');journal(db,ctx,r.id,'supplier_bill',[{account:'Goods received not invoiced',debit:receivedCost},{account:'Input VAT',debit:r.data.tax||0},{account:'Payables',credit:r.data.amount}]);return updateRecord(db,ctx,r,'matched',{...r.data,evidence:body.evidence});}
+      if(body.action==='matched'){
+        assert(r.status==='draft','Bill is not a draft.');const po=getRecord(db,ctx,r.data.purchaseId);
+        const receivedCost=(po.data.received||0)*po.data.unitCost,invoicedNet=r.data.amount-(r.data.tax||0),variance=invoicedNet-receivedCost;
+        const policy=purchaseMatchPolicy(db,ctx),tolerance=policy.toleranceFils+Math.round(receivedCost*policy.tolerancePercent/100);
+        assert(Math.abs(variance)<=tolerance,`Invoice net differs from received goods by ${variance} fils, outside the ${tolerance}-fils purchase tolerance. Resolve the discrepancy or have an owner widen the policy.`,409);
+        if(variance!==0)assert(['owner','manager','accountant'].includes(ctx.user.role),'A purchase price variance requires an authorised reviewer.',403);
+        assert(body.evidence?.trim(),'Matching evidence is required.');
+        const lines=[{account:'Goods received not invoiced',debit:receivedCost},{account:'Input VAT',debit:r.data.tax||0},...(variance>0?[{account:'Purchase price variance',debit:variance}]:variance<0?[{account:'Purchase price variance',credit:-variance}]:[]),{account:'Payables',credit:r.data.amount}];
+        journal(db,ctx,r.id,'supplier_bill',lines);
+        return updateRecord(db,ctx,r,'matched',{...r.data,evidence:body.evidence,matchVariance:variance,matchTolerance:tolerance});
+      }
       if(body.action==='paid'){assert(r.status==='matched','Match bill before payment.');assert(body.evidence?.trim(),'Bank payment evidence is required.');journal(db,ctx,r.id,'supplier_payment',[{account:'Payables',debit:r.data.amount},{account:'Bank',credit:r.data.amount}]);return updateRecord(db,ctx,r,'paid',{...r.data,paymentEvidence:body.evidence});}
     }
     if(['safety','incidents'].includes(r.module)&&['reviewed','resolved'].includes(body.action)){assert(['owner','safety'].includes(ctx.user.role),'The food-safety responsible person must approve this action.',403);assert(body.evidence?.trim(),'Verification evidence is required.');}
     if(r.module==='documents'&&body.action==='confirmed'){assert(['owner'].includes(ctx.user.role),'Owner review is required.',403);assert(body.evidence?.trim(),'Authority approval evidence is required.');}
     if(r.module==='deliveries'&&body.action==='dispatched'){const order=orderDetail(db,ctx,r.data.orderId);assert(order.status==='ready','All kitchen stations must be ready before dispatch.');assert(order.lines.every(l=>l.packed===l.quantity),'Complete the packing checklist before dispatch.',409);db.prepare("UPDATE orders SET status='handed_over',version=version+1,updated_at=? WHERE id=?").run(now(),order.id);}
+    if(r.module==='dispatches'&&body.action==='dispatched')assert(body.evidence?.trim(),'Dispatch evidence (vehicle / seal) is required.');
     if(r.module==='deliveries'&&body.action==='delivered')assert(body.evidence?.trim(),'Delivery acceptance evidence is required.');
     const index=cfg.states.indexOf(r.status),target=cfg.states.indexOf(body.action);
     if(r.module==='reservations'&&body.action==='seated'){assert(r.status==='confirmed','Only confirmed reservations can be seated.',409);const group=seatingGroup(db,ctx,r.data.tableId);assert(r.data.partySize<=group.capacity,'Party exceeds current table capacity.');const end=arrivalTime(r.data.endsAt);assert(end>now(),'The booked departure has passed. Create a new booking window.',409);seatAvailable(db,ctx,group,now(),end,r.id);}
@@ -290,6 +429,37 @@ export function recordAction(db,ctx,recordId,input) {
     assert(target>=0&&(target===index+1||special),`Cannot change ${r.status.replaceAll('_',' ')} to ${body.action.replaceAll('_',' ')}.`,409);
     return updateRecord(db,ctx,r,body.action,{...r.data,...(body.evidence?{evidence:body.evidence}:{}),...(body.reason?{actionReason:body.reason}:{}),...(r.module==='shifts'?{[body.action==='clocked_in'?'clockIn':'clockOut']:now()}: {})});
   });
+}
+export function moveStock(db,ctx,lotId,input){
+  permit(ctx,'inventory');
+  const body=z.object({locationId:z.string().max(200),quantity:positive.max(100_000_000),reason:text.min(3)}).parse(input);
+  return transaction(db,()=>{
+    const lot=scoped(db,'lots',ctx,lotId);assert(lot,'Lot not found in this outlet.',404);assert(lot.status==='available','Held or quarantined stock cannot be moved.',409);
+    const location=db.prepare('SELECT * FROM stock_locations WHERE id=? AND tenant_id=? AND outlet_id=?').get(body.locationId,ctx.tenantId,ctx.outletId);assert(location,'Select a stock location in this outlet.',404);
+    const placed=db.prepare('SELECT * FROM lot_locations WHERE lot_id=?').get(lotId);assert(!placed||placed.location_id!==body.locationId,'This lot is already placed in that location.',409);
+    assert(body.quantity<=lot.quantity,'Move quantity exceeds the lot quantity.',409);
+    let movedLotId=lotId;
+    if(body.quantity===lot.quantity){
+      db.prepare('INSERT INTO lot_locations VALUES(?,?,?,?,?) ON CONFLICT(lot_id) DO UPDATE SET location_id=excluded.location_id,updated_at=excluded.updated_at').run(lotId,ctx.tenantId,ctx.outletId,body.locationId,now());
+    } else {
+      const nlid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(nlid,ctx.tenantId,ctx.outletId,lot.ingredient_id,`${lot.code}-M`,lot.expiry,'available',lot.unit_cost,body.quantity,lot.id);
+      db.prepare('UPDATE lots SET quantity=quantity-? WHERE id=?').run(body.quantity,lotId);
+      db.prepare('INSERT INTO lot_locations VALUES(?,?,?,?,?)').run(nlid,ctx.tenantId,ctx.outletId,body.locationId,now());
+      movement(db,ctx,lot.ingredient_id,lotId,-body.quantity,'stock_move',nlid,body.reason);
+      movement(db,ctx,lot.ingredient_id,nlid,body.quantity,'stock_move',nlid,body.reason);
+      const allergens=db.prepare('SELECT allergens FROM lot_allergens WHERE lot_id=?').get(lotId);if(allergens)db.prepare('INSERT OR IGNORE INTO lot_allergens VALUES(?,?)').run(nlid,allergens.allergens);
+      movedLotId=nlid;
+    }
+    audit(db,ctx,'inventory.lot_moved',movedLotId,{from:placed?.location_id||null,to:body.locationId,quantity:body.quantity,sourceLot:lotId});
+    return {lotId:movedLotId,sourceLotId:lotId,locationId:body.locationId,location:location.name,quantity:body.quantity};
+  });
+}
+export function stockPlacement(db,ctx){
+  permit(ctx,'inventory','read');
+  const locations=db.prepare('SELECT * FROM stock_locations WHERE tenant_id=? AND outlet_id=?').all(ctx.tenantId,ctx.outletId);
+  const lots=db.prepare('SELECT l.*,i.name,i.unit FROM lots l JOIN ingredients i ON i.id=l.ingredient_id WHERE l.tenant_id=? AND l.outlet_id=? AND l.quantity>0').all(ctx.tenantId,ctx.outletId);
+  const placedOf=lotId=>db.prepare('SELECT location_id FROM lot_locations WHERE lot_id=?').get(lotId)?.location_id||null;
+  return {locations:locations.map(loc=>({id:loc.id,name:loc.name,type:loc.type,lots:lots.filter(l=>placedOf(l.id)===loc.id).map(l=>({id:l.id,code:l.code,ingredientId:l.ingredient_id,name:l.name,unit:l.unit,quantity:l.quantity,expiry:l.expiry}))})),unplaced:lots.filter(l=>!placedOf(l.id)).map(l=>({id:l.id,code:l.code,name:l.name,quantity:l.quantity,unit:l.unit}))};
 }
 export function holdLot(db,ctx,lotId,input) {
   permit(ctx,'inventory','hold');assert(['owner','safety'].includes(ctx.user.role),'Only the food-safety responsible person can change a hold.',403);const body=z.object({status:z.enum(['quarantined','available']),reason:text.min(3),recall:z.boolean().default(false)}).parse(input);
@@ -325,7 +495,7 @@ export function amendOrder(db,ctx,orderId,input){
     const order=orderDetail(db,ctx,orderId);assert(['accepted','preparing','ready'].includes(order.status),'Only an open, resumed order can be amended.',409);assert(order.version===b.version,'Order changed. Refresh before amending.',409);assert(!order.refunded,'An order with refunds requires a financial correction.',409);assert(!order.splits.length,'Immutable bill parts require a financial correction, not an amendment.',409);assert(b.addLines.length||b.removeLineIds.length,'Select an addition or removal.');assert(new Set(b.removeLineIds).size===b.removeLineIds.length,'A line can be removed only once.');
     const removed=b.removeLineIds.map(lid=>{const l=order.lines.find(l=>l.id===lid);assert(l,'Removal item is not in this order.',404);assert(!l.consumed,'A prepared item cannot be removed. Use approved cancellation or remake.',409);return l;});
     for(const l of removed)if(l.bundle)assert(order.lines.filter(x=>x.bundle?.bundle_key===l.bundle.bundle_key).every(x=>b.removeLineIds.includes(x.id)),'Remove every component of a combo together.',409);
-    const added=snapshotLines(db,ctx,b.addLines),remaining=order.lines.filter(l=>!b.removeLineIds.includes(l.id));assert(remaining.length+added.length>0&&remaining.length+added.length<=100,'Keep between 1 and 100 active item lines.');const gross=remaining.reduce((s,l)=>s+l.quantity*l.unit_price,0)+added.reduce((s,l)=>s+l.quantity*l.unitPrice,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000&&order.discount<gross,'Amended total is outside the supported range.');if(order.discount)enforceApproval(db,ctx,'discount',order.discount,gross);const total=gross-order.discount;assert(total>=order.paid,'Amendment would reduce the bill below recorded payments. Refund/correct it through finance.',409);const net=Math.round(total/1.05),tax=total-net,aid=id('amendment'),addedIds=[];
+    const added=snapshotLines(db,ctx,b.addLines),remaining=order.lines.filter(l=>!b.removeLineIds.includes(l.id));assert(remaining.length+added.length>0&&remaining.length+added.length<=100,'Keep between 1 and 100 active item lines.');const gross=remaining.reduce((s,l)=>s+l.quantity*l.unit_price,0)+added.reduce((s,l)=>s+l.quantity*l.unitPrice,0);assert(Number.isSafeInteger(gross)&&gross<=100_000_000&&order.discount<gross,'Amended total is outside the supported range.');if(order.discount)enforceApproval(db,ctx,'discount',order.discount,gross);const total=gross-order.discount;assert(total>=order.paid,'Amendment would reduce the bill below recorded payments. Refund/correct it through finance.',409);const {net,tax}=taxFromGross(total,taxPolicy(db,ctx).ratePercent),aid=id('amendment'),addedIds=[];
     for(const l of order.lines.filter(l=>!l.task_id)){const task=order.tasks.find(t=>t.station===l.station);if(task)db.prepare('INSERT OR IGNORE INTO line_service VALUES(?,?,?,?,?)').run(l.id,task.id,l.seat,l.course,l.packed);}
     for(const l of removed){db.prepare('INSERT INTO voided_lines VALUES(?,?,?)').run(l.id,aid,b.reason);db.prepare("UPDATE reservations SET status='released' WHERE line_id=? AND status='reserved'").run(l.id);}
     for(const l of added){let task=db.prepare("SELECT t.id FROM tasks t JOIN line_service s ON s.task_id=t.id JOIN order_lines l ON l.id=s.line_id LEFT JOIN voided_lines v ON v.line_id=l.id WHERE t.order_id=? AND t.station=? AND t.status=? AND s.course=? AND v.line_id IS NULL LIMIT 1").get(order.id,l.item.station,l.hold?'held':'queued',l.course);if(!task){task={id:id('task')};db.prepare('INSERT INTO tasks(id,tenant_id,outlet_id,order_id,station,status) VALUES(?,?,?,?,?,?)').run(task.id,ctx.tenantId,ctx.outletId,order.id,l.item.station,l.hold?'held':'queued');}const lid=id('line');addedIds.push(lid);db.prepare('INSERT INTO order_lines VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run(lid,order.id,l.itemId,l.item.name,l.quantity,l.unitPrice,l.item.station,l.item.version,JSON.stringify(l.recipe),JSON.stringify(l.selected),JSON.stringify(l.allergens),l.notes,0);saveBundle(db,lid,l);db.prepare('INSERT INTO line_service VALUES(?,?,?,?,0)').run(lid,task.id,l.seat,l.course);for(const r of l.recipe)allocate(db,ctx,r.ingredientId,r.quantity*l.quantity,order.id,{orderId:order.id,lineId:lid,reserve:true});}

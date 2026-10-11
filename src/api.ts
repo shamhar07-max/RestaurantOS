@@ -7,6 +7,11 @@ export async function api<T=any>(path:string,body?:unknown):Promise<T>{
   const data=await response.json();if(!response.ok){const error=new Error(data.error||'The request could not be completed.') as Error&{status:number};error.status=response.status;throw error;}
   return data;
 }
+export async function apiDelete<T=any>(path:string):Promise<T>{
+  const response=await fetch(`/api${path}`,{method:'DELETE',credentials:'same-origin',headers:{...(csrf?{'x-csrf-token':csrf}:{}),...(outlet?{'x-outlet-id':outlet}:{})}});
+  const data=await response.json();if(!response.ok){const error=new Error(data.error||'The request could not be completed.') as Error&{status:number};error.status=response.status;throw error;}
+  return data;
+}
 export async function download(type:string){
   const r=await fetch(`/api/export/${type}`,{headers:{'x-outlet-id':outlet},credentials:'same-origin'});
   if(!r.ok){const data=await r.json();throw new Error(data.error);}
