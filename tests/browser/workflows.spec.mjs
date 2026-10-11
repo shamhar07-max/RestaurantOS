@@ -1,7 +1,8 @@
 import {test,expect} from '@playwright/test';
 import {mkdirSync} from 'node:fs';
+import {paceDemoLogin} from './support/login.mjs';
 test.beforeEach(async({page})=>{await page.emulateMedia({reducedMotion:'reduce'});});
-const login=async(page,role='owner')=>{await page.goto('/');await page.getByLabel('Explore as').selectOption(role);await page.getByRole('button',{name:'Explore demo workspace'}).click();await expect(page.getByRole('heading',{name:'Every service. Under control.'})).toBeVisible();};
+const login=async(page,role='owner')=>{await paceDemoLogin();await page.goto('/');await page.getByLabel('Explore as').selectOption(role);await page.getByRole('button',{name:'Explore demo workspace'}).click();await expect(page.getByRole('heading',{name:'Every service. Under control.'})).toBeVisible();};
 test('owner workspaces render without client errors and data persists across reload',async({page})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));await login(page);
   for(const [nav,heading] of [['Orders & POS','Orders & point of sale'],['Tables & reservations','Tables & reservations'],['Kitchen display','Kitchen display'],['Delivery','Delivery & dispatch'],['Menu & recipes','Menu & recipes'],['Production','Production'],['Inventory','Inventory & traceability'],['Purchasing','Purchasing'],['Catering & meal plans','Catering & meal plans'],['Customers & loyalty','Customers & loyalty'],['Team & shifts','Team & shifts'],['Finance','Finance & reconciliation'],['Food safety','Food safety'],['Reports','Reports with evidence'],['Settings & integrations','Settings & integrations']]){

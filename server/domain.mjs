@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {traceDescendants} from './traceability.mjs';
 import {seatingGroup,bookingConflict,arrivalTime,seatAvailable} from './seating.mjs';
 import {enforceApproval,approvalAuthority} from './approvals.mjs';
 import { id,now,businessDate,transaction,audit,journal } from './db.mjs';
@@ -15,13 +16,15 @@ export const parseRecord=r=>r?{...r,data:JSON.parse(r.data)}:null;
 export function getRecord(db,ctx,recordId) { const r=parseRecord(scoped(db,'records',ctx,recordId));assert(r,'Record not found in this outlet.',404);return r; }
 function updateRecord(db,ctx,r,status,data=r.data) {db.prepare('UPDATE records SET status=?,data=?,version=version+1,updated_at=? WHERE id=?').run(status,JSON.stringify(data),now(),r.id);audit(db,ctx,`${r.module}.${status}`,r.id,{from:r.status,version:r.version+1});return getRecord(db,ctx,r.id);}
 function movement(db,ctx,ingredientId,lotId,quantity,type,origin,reason) {db.prepare('INSERT INTO movements VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id('mov'),ctx.tenantId,ctx.outletId,ingredientId,lotId,quantity,type,origin,ctx.user.id,reason,now());}
+function lotAllergens(db,ingredientId,lotId){return [...new Set([...JSON.parse(db.prepare('SELECT allergens FROM ingredients WHERE id=?').get(ingredientId)?.allergens||'[]'),...JSON.parse(db.prepare('SELECT allergens FROM lot_allergens WHERE lot_id=?').get(lotId)?.allergens||'[]')])];}
+function ingredientAllergens(db,ctx,ingredientId){const lots=db.prepare("SELECT id FROM lots WHERE tenant_id=? AND outlet_id=? AND ingredient_id=? AND quantity>0 AND status='available' AND expiry>=?").all(ctx.tenantId,ctx.outletId,ingredientId,businessDate());return [...new Set([...JSON.parse(db.prepare('SELECT allergens FROM ingredients WHERE id=? AND tenant_id=?').get(ingredientId,ctx.tenantId)?.allergens||'[]'),...lots.flatMap(l=>lotAllergens(db,ingredientId,l.id))])];}
 export function inventory(db,ctx) {
   const rows=db.prepare(`SELECT i.*, COALESCE(SUM(CASE WHEN l.status='available' AND l.expiry>=? THEN l.quantity ELSE 0 END),0) on_hand,
     COALESCE(SUM(CASE WHEN l.status='quarantined' THEN l.quantity ELSE 0 END),0) quarantined,
     COALESCE(SUM(CASE WHEN l.expiry<? THEN l.quantity ELSE 0 END),0) expired
     FROM ingredients i LEFT JOIN lots l ON l.ingredient_id=i.id AND l.outlet_id=? AND l.tenant_id=i.tenant_id
     WHERE i.tenant_id=? GROUP BY i.id`).all(businessDate(),businessDate(),ctx.outletId,ctx.tenantId);
-  return rows.map(row=>{const reserved=db.prepare("SELECT COALESCE(SUM(quantity),0) n FROM reservations WHERE ingredient_id=? AND tenant_id=? AND outlet_id=? AND status='reserved'").get(row.id,ctx.tenantId,ctx.outletId).n;return {...row,allergens:JSON.parse(row.allergens),reserved,available:row.on_hand-reserved};});
+  return rows.map(row=>{const reserved=db.prepare("SELECT COALESCE(SUM(quantity),0) n FROM reservations WHERE ingredient_id=? AND tenant_id=? AND outlet_id=? AND status='reserved'").get(row.id,ctx.tenantId,ctx.outletId).n;return {...row,allergens:ingredientAllergens(db,ctx,row.id),reserved,available:row.on_hand-reserved};});
 }
 function freeLots(db,ctx,ingredientId) {
   return db.prepare(`SELECT l.*,l.quantity-COALESCE((SELECT SUM(r.quantity) FROM reservations r WHERE r.lot_id=l.id AND r.status='reserved'),0) free
@@ -34,7 +37,7 @@ function allocate(db,ctx,ingredientId,quantity,origin,{orderId,lineId,reserve=fa
   for(const lot of lots){if(!left)break;const take=Math.min(lot.free,left);if(!take)continue;
     if(reserve)db.prepare('INSERT INTO reservations VALUES(?,?,?,?,?,?,?,?,?)').run(id('res'),ctx.tenantId,ctx.outletId,orderId,lineId,lot.id,ingredientId,take,'reserved');
     else {db.prepare('UPDATE lots SET quantity=quantity-? WHERE id=?').run(take,lot.id);movement(db,ctx,ingredientId,lot.id,-take,type,origin,reason);}
-    if(lotsUsed)lotsUsed.push({lotId:lot.id,code:lot.code,expiry:lot.expiry,quantity:take,unitCost:lot.unit_cost});cost+=take*lot.unit_cost;left-=take;
+    if(lotsUsed)lotsUsed.push({lotId:lot.id,code:lot.code,expiry:lot.expiry,quantity:take,unitCost:lot.unit_cost,allergens:lotAllergens(db,ingredientId,lot.id)});cost+=take*lot.unit_cost;left-=take;
   }
   return cost;
 }
@@ -87,7 +90,7 @@ function snapshotItems(db,ctx,lines){
       for(const m of selected){if(m.replace)recipe=recipe.filter(r=>r.ingredientId!==m.replace);recipe.push(...(m.ingredients||[]));}
       const aggregate=new Map();for(const r of recipe)aggregate.set(r.ingredientId,(aggregate.get(r.ingredientId)||0)+r.quantity);
       recipe=[...aggregate].map(([ingredientId,quantity])=>({ingredientId,quantity}));
-      const allergens=[...new Set(recipe.flatMap(r=>JSON.parse(db.prepare('SELECT allergens FROM ingredients WHERE id=? AND tenant_id=?').get(r.ingredientId,ctx.tenantId)?.allergens||'[]')))];
+      const allergens=[...new Set(recipe.flatMap(r=>ingredientAllergens(db,ctx,r.ingredientId)))];
       return {...l,item,recipe,allergens,selected,unitPrice:item.price+selected.reduce((s,m)=>s+m.price,0)};
     });
 }
@@ -192,6 +195,7 @@ export function refund(db,ctx,orderId,input) {
 export function createRecord(db,ctx,module,input) {
   const config=modules[module];assert(config,'Unknown workspace record.',404);permit(ctx,config.workspace,module==='payroll'?'payroll':module==='tills'?'till':'write');
   const fields={};for(const f of config.fields){let schema=f.type==='number'?integer:f.type==='select'?z.enum(f.options):z.string().max(f.type==='textarea'?4000:300);if(f.type==='email')schema=z.email().or(z.literal(''));if(f.required&&f.type!=='number'&&f.type!=='select')schema=schema.refine(v=>v.trim().length>0,`${f.label} is required`);fields[f.key]=f.required?schema:schema.optional();}
+  if(module==='batches'){fields.expiry=z.iso.date();fields.inputId=z.string().optional();fields.inputQuantity=integer.optional();fields.inputs=z.array(z.object({ingredientId:z.string(),quantity:positive.max(100_000_000)}).strict()).min(1).max(30).optional();}
   const data=z.object(fields).strict().parse(input);
   return transaction(db,()=>{
     for(const f of config.fields.filter(f=>['ingredient','supplier','staff','table','outlet'].includes(f.type))){if(!data[f.key])continue;
@@ -205,7 +209,7 @@ export function createRecord(db,ctx,module,input) {
     }
     if(['purchases','transfers','wastage'].includes(module))assert(data.quantity>0,'Quantity must be positive.');
     if(module==='purchases'){assert(getRecord(db,ctx,data.supplierId).status==='approved','Supplier must be approved.');data.received=0;}
-    if(module==='batches'){assert(data.inputQuantity>0&&data.outputQuantity>0,'Batch quantities must be positive.');assert(data.inputId!==data.outputId,'Input and output must be different ingredients.');assert(data.expiry>=businessDate(),'Output expiry must not be in the past.');}
+    if(module==='batches'){assert(data.outputQuantity>0&&data.outputQuantity<=100_000_000,'Planned output must be positive and within the supported range.');const inputs=data.inputs||[{ingredientId:data.inputId,quantity:data.inputQuantity}];assert(inputs.length&&inputs.every(i=>i.ingredientId&&i.quantity>0),'Add positive ingredient quantities.');assert(new Set(inputs.map(i=>i.ingredientId)).size===inputs.length,'Batch ingredients must be unique.');for(const i of inputs){assert(i.ingredientId!==data.outputId,'Input and output must be different ingredients.');assert(db.prepare('SELECT id FROM ingredients WHERE id=? AND tenant_id=?').get(i.ingredientId,ctx.tenantId),'Batch ingredient not found.',404);}if(data.inputs){assert(!data.inputId&&!data.inputQuantity,'Use either multiple inputs or the legacy single input.');data.multiInput=true;}data.inputs=inputs;assert(data.expiry>=businessDate(),'Output expiry must not be in the past.');}
     if(module==='contracts'){assert(data.rate>0,'Contract rate must be positive.');assert(data.startDate<=data.endDate,'Contract dates are invalid.');data.rateVersion=1;}
     if(module==='subscriptions'){assert(data.entitlements>0,'A subscription needs funded entitlements.');data.used=0;}
     if(module==='shifts'){assert(new Date(data.startsAt)<new Date(data.endsAt),'Shift end must follow start.');}
@@ -225,7 +229,7 @@ const approvalModules=new Set(['purchases','batches','transfers','counts','wasta
 export function recordAction(db,ctx,recordId,input) {
   const body=z.object({action:z.string().max(50),reason:text.default(''),version:positive,quantity:integer.optional(),expiry:z.string().optional(),lotCode:z.string().max(100).optional(),evidence:text.optional(),counted:integer.optional(),payment:integer.optional()}).strict().parse(input);
   return transaction(db,()=>{
-    const r=getRecord(db,ctx,recordId),cfg=modules[r.module];assert(cfg,'Unknown record.');permit(ctx,cfg.workspace,r.module==='payroll'?'payroll':r.module==='tills'?'till':body.action==='receive'&&r.module==='purchases'?'receive':r.module==='batches'&&['released','rejected'].includes(body.action)?'release':'write');assert(r.version===body.version,'This record changed. Refresh it before acting.',409);
+    const r=getRecord(db,ctx,recordId),cfg=modules[r.module];assert(cfg,'Unknown record.');permit(ctx,cfg.workspace,r.module==='payroll'?'payroll':r.module==='tills'?'till':body.action==='receive'&&r.module==='purchases'?'receive':r.module==='batches'&&['released','rejected','correct_expiry'].includes(body.action)?'release':'write');assert(r.version===body.version,'This record changed. Refresh it before acting.',409);
     const sensitive=body.action==='approved'||body.action==='matched'||body.action==='reconciled'||body.action==='period_closed';
     if(sensitive&&approvalModules.has(r.module))assert(['owner','manager','accountant','purchasing','hr'].includes(ctx.user.role),'An authorised approver is required.',403);
     if(r.module==='purchases'&&body.action==='receive'){
@@ -234,14 +238,24 @@ export function recordAction(db,ctx,recordId,input) {
       const cost=body.quantity*r.data.unitCost;journal(db,ctx,lid,'receipt',[{account:'Inventory',debit:cost},{account:'Goods received not invoiced',credit:cost}]);const received=r.data.received+body.quantity;return updateRecord(db,ctx,r,received===r.data.quantity?'received':'part_received',{...r.data,received});
     }
     if(r.module==='batches'){
-      if(body.action==='executing'){assert(r.status==='planned','Batch has already started.',409);const cost=allocate(db,ctx,r.data.inputId,r.data.inputQuantity,r.id,{type:'production_issue',reason:'Production input'});return updateRecord(db,ctx,r,'executing',{...r.data,inputCost:cost});}
+      if(body.action==='correct_expiry'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety expiry review permission is required.',403);assert(['planned','executing','quality_hold'].includes(r.status),'Released or rejected batch expiry is immutable.',409);assert(body.expiry&&z.iso.date().safeParse(body.expiry).success&&body.expiry>=businessDate(),'Choose a usable output expiry.');assert(body.evidence?.trim(),'Expiry review evidence is required.');const sources=(r.data.inputLots||[]).flatMap(i=>i.lots);if(sources.length)assert(sources.every(l=>body.expiry<=l.expiry),'Reviewed expiry cannot exceed any issued input lot expiry.',409);return updateRecord(db,ctx,r,r.status,{...r.data,expiry:body.expiry,expiryReview:body.evidence});}
+      if(body.action==='executing'){assert(r.status==='planned','Batch has already started.',409);const inputs=r.data.inputs||[{ingredientId:r.data.inputId,quantity:r.data.inputQuantity}],inputLots=[];let cost=0;for(const i of inputs){const lotsUsed=[];cost+=allocate(db,ctx,i.ingredientId,i.quantity,r.id,{type:'production_issue',reason:'Production input',lotsUsed});inputLots.push({...i,lots:lotsUsed});}assert(Number.isSafeInteger(cost)&&cost<=100_000_000,'Production cost exceeds the supported range.');journal(db,ctx,r.id,'production_issue',[{account:'Production in progress',debit:cost},{account:'Inventory',credit:cost}]);return updateRecord(db,ctx,r,'executing',{...r.data,inputs,inputLots,inputCost:cost,wipPosted:true});}
       if(body.action==='quality_hold'){assert(r.status==='executing','Only executing batches can be held.');return updateRecord(db,ctx,r,'quality_hold');}
-      if(body.action==='released'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety release permission is required.',403);assert(r.status==='quality_hold','Review the quality hold before release.');assert(body.quantity>0,'Record actual output quantity.');assert(body.evidence?.trim(),'Release evidence is required.');const lid=id('lot'),unitCost=Math.round(r.data.inputCost/body.quantity);db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,ctx.outletId,r.data.outputId,r.data.name,r.data.expiry,'available',unitCost,body.quantity,r.id);movement(db,ctx,r.data.outputId,lid,body.quantity,'production_output',r.id,body.evidence);return updateRecord(db,ctx,r,'released',{...r.data,actualOutput:body.quantity,yieldPercent:Math.round(body.quantity/r.data.inputQuantity*10000)/100,outputLot:lid,releaseEvidence:body.evidence});}
-      if(body.action==='rejected'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety rejection permission is required.',403);assert(['executing','quality_hold'].includes(r.status),'Only an active batch can be rejected.');assert(body.reason.trim(),'Rejection reason is required.');journal(db,ctx,r.id,'production_waste',[{account:'Wastage',debit:r.data.inputCost},{account:'Inventory',credit:r.data.inputCost}]);return updateRecord(db,ctx,r,'rejected',{...r.data,rejectionReason:body.reason});}
+      if(body.action==='released'){
+        assert(['owner','safety'].includes(ctx.user.role),'Food-safety release permission is required.',403);assert(r.status==='quality_hold','Review the quality hold before release.');assert(body.quantity>0&&body.quantity<=100_000_000,'Record actual output quantity within the supported range.');assert(body.evidence?.trim(),'Release evidence is required.');assert(r.data.expiry>=businessDate(),'Output expiry is in the past.',409);
+        const sources=(r.data.inputLots||[]).flatMap(i=>i.lots);for(const source of sources){const lot=db.prepare('SELECT status,expiry FROM lots WHERE id=?').get(source.lotId);assert(lot&&lot.status==='available'&&lot.expiry>=businessDate(),'An input lot is held or expired. Resolve the batch before release.',409);}
+        assert(sources.length,'Issued lot evidence is missing. Reconcile this legacy batch before release.',409);assert(sources.every(l=>r.data.expiry<=l.expiry),'Output expiry exceeds an input lot expiry. A reviewed shelf-life procedure is required; choose an earlier expiry.',409);
+        const lid=id('lot'),unitCost=Math.round(r.data.inputCost/body.quantity),outputCost=unitCost*body.quantity;
+        if(r.data.wipPosted){const variance=r.data.inputCost-outputCost;journal(db,ctx,r.id,'production_release',[{account:'Inventory',debit:outputCost},{account:'Production in progress',credit:r.data.inputCost},...(variance>0?[{account:'Production rounding variance',debit:variance}]:variance<0?[{account:'Production rounding variance',credit:-variance}]:[])]);}
+        db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,ctx.outletId,r.data.outputId,r.data.name,r.data.expiry,'available',unitCost,body.quantity,r.id);
+        const allergens=[...new Set(sources.flatMap(l=>l.allergens||[]))];db.prepare('INSERT INTO lot_allergens VALUES(?,?)').run(lid,JSON.stringify(allergens));movement(db,ctx,r.data.outputId,lid,body.quantity,'production_output',r.id,body.evidence);
+        return updateRecord(db,ctx,r,'released',{...r.data,actualOutput:body.quantity,yieldPercent:Math.round(body.quantity/(r.data.multiInput?r.data.outputQuantity:r.data.inputQuantity)*10000)/100,yieldBasis:r.data.multiInput?'planned_output':'legacy_input_quantity',outputLot:lid,outputCost,roundingVariance:r.data.inputCost-outputCost,allergens,releaseEvidence:body.evidence});
+      }
+      if(body.action==='rejected'){assert(['owner','safety'].includes(ctx.user.role),'Food-safety rejection permission is required.',403);assert(['executing','quality_hold'].includes(r.status),'Only an active batch can be rejected.');assert(body.reason.trim(),'Rejection reason is required.');journal(db,ctx,r.id,'production_waste',[{account:'Wastage',debit:r.data.inputCost},{account:r.data.wipPosted?'Production in progress':'Inventory',credit:r.data.inputCost}]);return updateRecord(db,ctx,r,'rejected',{...r.data,rejectionReason:body.reason});}
     }
     if(r.module==='transfers'){
       if(body.action==='in_transit'){assert(r.status==='planned','Transfer is already dispatched.');assert(r.data.destinationId!==ctx.outletId,'Select a different destination.');const destination=db.prepare('SELECT * FROM outlets WHERE id=? AND tenant_id=?').get(r.data.destinationId,ctx.tenantId);assert(destination.entity_id===ctx.entityId,'Intercompany transfers require a separate commercial workflow.');const lotsUsed=[];const cost=allocate(db,ctx,r.data.ingredientId,r.data.quantity,r.id,{type:'transfer_dispatch',reason:body.reason||'Branch dispatch',lotsUsed});journal(db,ctx,r.id,'transfer_dispatch',[{account:'In-transit stock',debit:cost},{account:'Inventory',credit:cost}]);return updateRecord(db,ctx,r,'in_transit',{...r.data,cost,lotsUsed,dispatchedAt:now()});}
-      if(body.action==='received'){assert(r.status==='in_transit','Only in-transit stock can be received.');assert(ctx.user.outlet_ids.includes(r.data.destinationId),'You do not have access to the receiving outlet.',403);assert(body.evidence?.trim(),'Receiving evidence is required.');const destinationCtx={...ctx,outletId:r.data.destinationId};for(const source of r.data.lotsUsed){const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,r.data.destinationId,r.data.ingredientId,`${r.data.name}/${source.code}`,source.expiry,'available',source.unitCost,source.quantity,r.id);movement(db,destinationCtx,r.data.ingredientId,lid,source.quantity,'transfer_receive',r.id,body.evidence);}journal(db,ctx,r.id,'transfer_receive',[{account:'Inventory transferred out',debit:r.data.cost},{account:'In-transit stock',credit:r.data.cost}]);journal(db,destinationCtx,r.id,'transfer_receive_destination',[{account:'Inventory',debit:r.data.cost},{account:'Inventory transferred in',credit:r.data.cost}]);return updateRecord(db,ctx,r,'received',{...r.data,receivedAt:now(),evidence:body.evidence});}
+      if(body.action==='received'){assert(r.status==='in_transit','Only in-transit stock can be received.');assert(ctx.user.outlet_ids.includes(r.data.destinationId),'You do not have access to the receiving outlet.',403);assert(body.evidence?.trim(),'Receiving evidence is required.');const destinationCtx={...ctx,outletId:r.data.destinationId};for(const source of r.data.lotsUsed){const lid=id('lot');db.prepare('INSERT INTO lots VALUES(?,?,?,?,?,?,?,?,?,?)').run(lid,ctx.tenantId,r.data.destinationId,r.data.ingredientId,`${r.data.name}/${source.code}`,source.expiry,'available',source.unitCost,source.quantity,r.id);db.prepare('INSERT INTO lot_allergens VALUES(?,?)').run(lid,JSON.stringify(source.allergens||[]));movement(db,destinationCtx,r.data.ingredientId,lid,source.quantity,'transfer_receive',r.id,body.evidence);}journal(db,ctx,r.id,'transfer_receive',[{account:'Inventory transferred out',debit:r.data.cost},{account:'In-transit stock',credit:r.data.cost}]);journal(db,destinationCtx,r.id,'transfer_receive_destination',[{account:'Inventory',debit:r.data.cost},{account:'Inventory transferred in',credit:r.data.cost}]);return updateRecord(db,ctx,r,'received',{...r.data,receivedAt:now(),evidence:body.evidence});}
     }
     if(r.module==='wastage'&&body.action==='approved'){assert(r.status==='draft','Wastage is already posted.');const cost=allocate(db,ctx,r.data.ingredientId,r.data.quantity,r.id,{type:'waste',reason:r.data.notes});journal(db,ctx,r.id,'waste',[{account:'Wastage',debit:cost},{account:'Inventory',credit:cost}]);return updateRecord(db,ctx,r,'approved',{...r.data,cost});}
     if(r.module==='counts'&&body.action==='approved'){
@@ -278,8 +292,19 @@ export function recordAction(db,ctx,recordId,input) {
   });
 }
 export function holdLot(db,ctx,lotId,input) {
-  permit(ctx,'inventory','hold');assert(['owner','safety'].includes(ctx.user.role),'Only the food-safety responsible person can change a hold.',403);const body=z.object({status:z.enum(['quarantined','available']),reason:text.min(3)}).parse(input);
-  return transaction(db,()=>{const lot=scoped(db,'lots',ctx,lotId);assert(lot,'Lot not found.',404);if(body.status==='available')assert(lot.expiry>=businessDate(),'Expired stock cannot be released.');db.prepare('UPDATE lots SET status=? WHERE id=?').run(body.status,lotId);audit(db,ctx,`lot.${body.status}`,lotId,{reason:body.reason});return scoped(db,'lots',ctx,lotId);});
+  permit(ctx,'inventory','hold');assert(['owner','safety'].includes(ctx.user.role),'Only the food-safety responsible person can change a hold.',403);const body=z.object({status:z.enum(['quarantined','available']),reason:text.min(3),recall:z.boolean().default(false)}).parse(input);
+  return transaction(db,()=>{
+    const lot=scoped(db,'lots',ctx,lotId);assert(lot,'Lot not found.',404);
+    if(body.status==='available'){
+      assert(!body.recall,'Recall chains are reviewed and released one lot at a time.');assert(lot.expiry>=businessDate(),'Expired stock cannot be released.');
+      const sources=db.prepare('SELECT l.status,l.expiry FROM recall_holds h JOIN lots l ON l.id=h.source_lot_id WHERE h.lot_id=? AND h.released_at IS NULL AND h.source_lot_id<>?').all(lotId,lotId);assert(sources.every(s=>s.status==='available'&&s.expiry>=businessDate()),'A source recall hold remains unresolved. Release cannot bypass it.',409);
+      db.prepare('UPDATE recall_holds SET released_at=? WHERE lot_id=? AND released_at IS NULL').run(now(),lotId);
+    }
+    let recall=null;
+    if(body.recall){const trace=traceDescendants(db,ctx,lot);assert(!trace.restrictedLinks&&!trace.truncated,'A recall chain exceeds your outlet access or trace limit. An authorised recall lead must review the complete chain.',409);for(const child of trace.lots){db.prepare("INSERT INTO recall_holds VALUES(?,?,?,?,NULL) ON CONFLICT(lot_id,source_lot_id) DO UPDATE SET reason=excluded.reason,created_at=excluded.created_at,released_at=NULL").run(child.id,lotId,body.reason,now());db.prepare("UPDATE lots SET status='quarantined' WHERE id=?").run(child.id);audit(db,{...ctx,outletId:child.outlet_id},'lot.recall_hold',child.id,{sourceLot:lotId,reason:body.reason});}recall={lotCount:trace.lots.length,orderCount:trace.orders.length};}
+    else db.prepare('UPDATE lots SET status=? WHERE id=?').run(body.status,lotId);
+    audit(db,ctx,`lot.${body.status}`,lotId,{reason:body.reason,recall});return {...scoped(db,'lots',ctx,lotId),recall};
+  });
 }
 export function summary(db,ctx) {
   const all=orders(db,ctx),today=all.filter(o=>o.business_date===businessDate()),valid=today.filter(o=>o.status!=='cancelled');

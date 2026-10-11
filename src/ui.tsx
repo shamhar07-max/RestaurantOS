@@ -25,6 +25,7 @@ export function Field({label:caption,children,hint}:{label:string,children:React
 export function DataTable({headers,children}:{headers:string[],children:ReactNode}){return <div className="table-wrap"><table><thead><tr>{headers.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;}
 export function RecordValue({field,value,refs}:{field:Row,value:any,refs:Row}){
   if(value===undefined||value==='')return <span className="muted">—</span>;
+  if(field.type==='ingredient_lines')return <>{Array.isArray(value)?value.map((r:Row)=>{const i=refs.ingredient?.find((i:Row)=>i.id===r.ingredientId);return <span className="batch-input-value" key={r.ingredientId}>{i?.name||r.ingredientId}: {r.quantity} {i?.unit}</span>;}):'—'}</>;
   if(field.type==='datetime-local'){const stamp=/([Zz]|[+-]\d\d:\d\d)$/.test(String(value))?String(value):String(value)+'+04:00';return Number.isFinite(new Date(stamp).getTime())?<>{dateTime(stamp)} · UAE time</>:<>{String(value)}</>;}
   if(field.label.includes('fils'))return <>{money(Number(value))}</>;
   const lookup=refs[field.type]?.find((r:Row)=>r.id===value);return <>{lookup?.name||lookup?.data?.name||String(value)}</>;

@@ -79,7 +79,7 @@ test('partial supplier receiving preserves balance and stale replay cannot add m
   r=advance(db,ctx,r,'receive',{quantity:600,expiry:'2099-01-01',lotCode:'SUP-2'});assert.equal(r.status,'received');assert.equal(r.data.received,1000);db.close();
 });
 test('batch issues raw input once; subsequent sale consumes prepared component only',()=>{
-  const {db,ctx}=fixture();let batch=createRecord(db,ctx,'batches',{name:'SAUCE-TEST',inputId:'tomato',inputQuantity:500,outputId:'sauce',outputQuantity:400,expiry:'2099-01-01',notes:'Approved test recipe'});const tomatoBefore=stock(db,ctx,'tomato').on_hand,sauceBefore=stock(db,ctx,'sauce').on_hand;
+  const {db,ctx}=fixture();let batch=createRecord(db,ctx,'batches',{name:'SAUCE-TEST',inputId:'tomato',inputQuantity:500,outputId:'sauce',outputQuantity:400,expiry:db.prepare("SELECT expiry FROM lots WHERE id='lot_tomato_outlet_downtown'").get().expiry,notes:'Approved test recipe'});const tomatoBefore=stock(db,ctx,'tomato').on_hand,sauceBefore=stock(db,ctx,'sauce').on_hand;
   batch=advance(db,ctx,batch,'executing');batch=advance(db,ctx,batch,'quality_hold');batch=advance(db,ctx,batch,'released',{quantity:400});assert.equal(stock(db,ctx,'tomato').on_hand,tomatoBefore-500);assert.equal(stock(db,ctx,'sauce').on_hand,sauceBefore+400);const o=createOrder(db,ctx,input());taskAction(db,ctx,o.tasks[0].id,{action:'start'});assert.equal(stock(db,ctx,'tomato').on_hand,tomatoBefore-500);assert.equal(stock(db,ctx,'sauce').on_hand,sauceBefore+370);db.close();
 });
 test('expired and quarantined lots cannot be allocated or released by cashier',()=>{

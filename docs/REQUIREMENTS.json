@@ -332,7 +332,7 @@
       "requirement": "Production batch/yield",
       "acceptance": "Actual yield and waste explain input/output",
       "status": "partial",
-      "note": "Single-input batch/yield and quality release; multi-input BOM and demand planning pending."
+      "note": "Multi-input batches issue source lots once, value production in progress, clear it on release/rejection, and record actual/planned output plus rounding. Nested versioned BOM editor and demand/capacity linkage remain pending."
     },
     {
       "id": "CORE-06",
@@ -356,7 +356,7 @@
       "requirement": "Traceability report",
       "acceptance": "Selected lot produces real affected",
       "status": "implemented",
-      "note": "Movement-linked orders/batches/transfers with evidence gaps; recursive recall traversal pending."
+      "note": "Recorded genealogy follows nested production and outlet transfers to reserved/consumed orders. Scoped recall-chain holds block unresolved ancestor release; restricted/truncated chains cannot be marked complete. Bulk serving identity, external notification and reviewed recall completion remain pending."
     },
     {
       "id": "CORE-09",
@@ -420,7 +420,7 @@
       "requirement": "Allergen inheritance",
       "acceptance": "Component change identifies affected",
       "status": "partial",
-      "note": "Ingredient/modifier allergens inherited; component publication impact review pending."
+      "note": "Prepared lots inherit issued source allergens through production/transfers into stock/menu/order checks. Ingredient availability unions usable lot allergens conservatively. Component publication impact review and reviewed clinical/specialist diet procedures remain pending."
     },
     {
       "id": "CORE-17",
