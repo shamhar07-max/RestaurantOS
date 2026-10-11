@@ -1,12 +1,13 @@
 import {useEffect,useState,useCallback,useRef} from 'react';
-import {Menu as MenuIcon,Search,X,LogOut,MapPin,RefreshCw,Bell,ArrowRight,FlaskConical,AlertCircle,CheckCircle2,LayoutDashboard,ShoppingBag,Armchair,ChefHat,Truck,BookOpen,Factory,Package,ShoppingCart,CalendarDays,HeartHandshake,Users,Wallet,ShieldCheck,ChartNoAxesCombined,Settings as SettingsIcon} from 'lucide-react';
-const Icons={Menu:MenuIcon,Search,X,LogOut,MapPin,RefreshCw,Bell,ArrowRight,FlaskConical,AlertCircle,CheckCircle2,LayoutDashboard,ShoppingBag,Armchair,ChefHat,Truck,BookOpen,Factory,Package,ShoppingCart,CalendarDays,HeartHandshake,Users,Wallet,ShieldCheck,ChartNoAxesCombined,Settings:SettingsIcon};
+import {Menu as MenuIcon,Search,X,LogOut,MapPin,RefreshCw,Bell,ArrowRight,FlaskConical,AlertCircle,CheckCircle2,LayoutDashboard,ShoppingBag,Armchair,ChefHat,Truck,BookOpen,Factory,Package,ShoppingCart,CalendarDays,HeartHandshake,Users,Wallet,ShieldCheck,ChartNoAxesCombined,Settings as SettingsIcon,Sparkles} from 'lucide-react';
+const Icons={Menu:MenuIcon,Search,X,LogOut,MapPin,RefreshCw,Bell,ArrowRight,FlaskConical,AlertCircle,CheckCircle2,LayoutDashboard,ShoppingBag,Armchair,ChefHat,Truck,BookOpen,Factory,Package,ShoppingCart,CalendarDays,HeartHandshake,Users,Wallet,ShieldCheck,ChartNoAxesCombined,Settings:SettingsIcon,Sparkles};
 import {AccountSecurity} from './Security';
 import {api,setCsrf,setOutlet,label} from './api';
 import {workspaces,allowed} from '../shared/modules.mjs';
 import {AppContext,ErrorBox,Loading,type Row} from './ui';
 import {Dashboard,Orders,Kitchen,Tables,MenuWorkspace,InventoryWorkspace,RecordsWorkspace,Finance,Reports,Settings} from './screens';
 import {Channels} from './Channels';
+import {AiWorkspace} from './Ai';
 
 export function App(){
   const [boot,setBoot]=useState<Row|null>(null),[loading,setLoading]=useState(true),[page,setPage]=useState(location.hash.slice(1)||'home'),[version,setVersion]=useState(0),[toast,setToast]=useState<{message:string,error:boolean}|null>(null),[busy,setBusy]=useState(false),[mobile,setMobile]=useState(false),[search,setSearch]=useState(''),[attention,setAttention]=useState(false);
@@ -26,7 +27,7 @@ export function App(){
   if(!boot)return <Login onLogin={()=>{navigate('home');void load();}}/>;
   const visible=workspaces.filter(w=>allowed(boot.user.role,w.id,'read')||w.id==='home');
   const current=page==='account'?{id:'account',name:'Your account security'}:visible.find(w=>w.id===page)||visible[0];
-  const screens:Record<string,any>={home:Dashboard,orders:Orders,kitchen:Kitchen,tables:Tables,menu:MenuWorkspace,inventory:InventoryWorkspace,channels:Channels,finance:Finance,reports:Reports,settings:Settings,account:AccountSecurity};
+  const screens:Record<string,any>={home:Dashboard,orders:Orders,kitchen:Kitchen,tables:Tables,menu:MenuWorkspace,inventory:InventoryWorkspace,channels:Channels,finance:Finance,reports:Reports,settings:Settings,ai:AiWorkspace,account:AccountSecurity};
   const Screen=screens[current.id];
   const signOut=async()=>{await run(()=>api('/auth/logout',{}),'Signed out');setBoot(null);setCsrf('');setOutlet('');};
   return <AppContext.Provider value={{boot,version,busy,run,notify,navigate,search,reloadBootstrap:load}}><div className="app-shell">

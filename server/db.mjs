@@ -75,6 +75,7 @@ export function openDatabase(file=resolve(process.env.DATA_DIR||'data','restaura
   CREATE TABLE IF NOT EXISTS line_seat_units(line_id TEXT NOT NULL,seat INTEGER NOT NULL CHECK(seat>0),quantity INTEGER NOT NULL CHECK(quantity>0),PRIMARY KEY(line_id,seat));
   CREATE TABLE IF NOT EXISTS line_corrections(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,outlet_id TEXT NOT NULL,order_id TEXT NOT NULL,line_id TEXT NOT NULL,old_quantity INTEGER NOT NULL,new_quantity INTEGER NOT NULL,amount INTEGER NOT NULL,reason TEXT NOT NULL,evidence TEXT NOT NULL,actor_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(tenant_id,outlet_id,idempotency_key));
   CREATE TABLE IF NOT EXISTS bundle_configs(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,outlet_id TEXT NOT NULL,name TEXT NOT NULL,price INTEGER NOT NULL,groups TEXT NOT NULL,status TEXT NOT NULL,version INTEGER NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS assistant_log(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,outlet_id TEXT NOT NULL,agent TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,payload TEXT NOT NULL,evidence TEXT NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS order_scope ON orders(tenant_id,outlet_id,created_at);
   CREATE INDEX IF NOT EXISTS record_scope ON records(tenant_id,outlet_id,module);
   CREATE INDEX IF NOT EXISTS lot_scope ON lots(tenant_id,outlet_id,ingredient_id,expiry);

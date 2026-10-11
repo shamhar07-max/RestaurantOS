@@ -59,13 +59,14 @@ export const workspaces = [
   {id:'finance',name:'Finance',icon:'Wallet',group:'Business'},
   {id:'safety',name:'Food safety',icon:'ShieldCheck',group:'Business'},
   {id:'reports',name:'Reports',icon:'ChartNoAxesCombined',group:'Business'},
+  {id:'ai',name:'AI & automation',icon:'Sparkles',group:'Business'},
   {id:'settings',name:'Settings & integrations',icon:'Settings',group:'Business'},
 ];
 export const rolePermissions = {
-  owner:['*'], manager:['home','orders','tables','kitchen','delivery','menu','production','inventory','purchasing','channels','catering','customers','staff','finance:read','safety','reports','settings:read'],
+  owner:['*'], manager:['home','orders','tables','kitchen','delivery','menu','production','inventory','purchasing','channels','catering','customers','staff','finance:read','safety','reports','ai','settings:read'],
   cashier:['home','orders','tables','customers:read','menu:read','finance:till'], waiter:['home','orders:read','orders:create','tables','menu:read'],
-  chef:['home','kitchen','menu:read','production','inventory:read'], purchasing:['home','purchasing','inventory:read','menu:read'],
-  storekeeper:['home','inventory','purchasing:receive','purchasing:read','production:read'], accountant:['home','finance','orders:read','purchasing:read','channels:read','reports','catering:read'],
+  chef:['home','kitchen','menu:read','production','inventory:read','ai'], purchasing:['home','purchasing','inventory:read','menu:read','ai'],
+  storekeeper:['home','inventory','purchasing:receive','purchasing:read','production:read'], accountant:['home','finance','orders:read','purchasing:read','channels:read','reports','catering:read','ai'],
   safety:['home','safety','inventory:read','inventory:hold','production:read','production:release','settings:read'],
   hr:['home','staff','finance:payroll'], dispatcher:['home','delivery','orders:read'], franchise:['home','orders:read','menu:read','reports'],
 };

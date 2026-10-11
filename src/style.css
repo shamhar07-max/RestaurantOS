@@ -19,3 +19,34 @@
 .account-security-link{display:flex;align-items:center;gap:8px;color:var(--porcelain);padding:8px 0;font-size:12px}
 .catalogue-component,.catalogue-variants{border-top:1px solid var(--line);padding-top:20px;margin-top:24px}.catalogue-component h3,.catalogue-variants h3{margin-bottom:16px}.catalogue-component .check-row small{display:block}.catalogue-variants .panel-note{padding:0;margin:0 0 16px}.variant-choices{display:grid;gap:12px;margin:18px 0}.variant-choice{display:flex;justify-content:space-between;gap:16px;width:100%;text-align:left}.variant-choice small{display:block;color:var(--muted);margin-top:4px}.variant-choice strong{font-variant-numeric:tabular-nums}
 .batch-input-value{display:block;margin-bottom:5px}.drawer-content>.catalogue-variants{margin-bottom:24px}
+
+/* AI & automation workspace */
+.status-connected{background:#e4ede6;color:var(--success)}.status-held{background:#f3ead9;color:var(--warning)}
+.pill-amber{background:#f0e3c8;color:#7a5c14}
+.settings-row{display:flex;align-items:flex-start;gap:13px;padding:2px 22px 14px}.settings-row strong{display:block;font-size:12px;margin-bottom:4px}.settings-row small{display:block;font-size:10px;color:var(--muted);line-height:1.7}
+.agent-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 22px 22px}
+.agent-card{border:1px solid var(--line);border-radius:10px;padding:17px;margin:0;background:#fffdfa;overflow:visible}
+.agent-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}.agent-head>div{display:flex;flex-wrap:wrap;align-items:center;gap:7px}.agent-head>div strong{font-size:13px}.agent-head .small-pill{margin:0}
+.agent-icon{width:34px;height:34px;border-radius:9px;background:#eae3e9;color:var(--fig);display:grid;place-items:center;flex-shrink:0}
+.agent-card>p{font-size:11px;color:var(--muted);line-height:1.75;margin:0 0 10px}
+.control-line{display:flex;gap:7px;align-items:flex-start;font-size:10px;color:#77604c;background:#f5f0e7;border-radius:7px;padding:9px 10px;margin:0!important}
+.control-line svg{flex-shrink:0;margin-top:1px}
+.agent-card .field{margin-bottom:10px}.agent-card .field input{font-size:11px;padding:8px 10px}
+.agent-card>button{margin-top:2px}
+.agent-result{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.agent-result .table-wrap table th{font-size:9px;padding:8px 10px} .agent-result .table-wrap table td{padding:9px 10px;font-size:10px} .agent-result .table-wrap table th:first-child{width:30%}
+.agent-result .table-wrap table tr th,.agent-result .table-wrap table tr td{border-top:1px solid #eee7de}
+.agent-result .table-wrap table tr:first-child th,.agent-result .table-wrap table tr:first-child td{border-top:0}
+.suggestion{display:flex;gap:8px;align-items:flex-start;font-size:11px;background:#edeccb;border-radius:8px;padding:11px 12px;color:var(--fig);margin-top:10px;line-height:1.7}.suggestion svg{flex-shrink:0;margin-top:1px}
+.error-line{font-size:10px;color:var(--danger);margin-top:9px}
+.agent-result details>summary{cursor:pointer;font-size:10px;color:var(--fig);font-weight:750;margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.agent-result details pre,.record-inline pre{max-width:100%;width:100%;margin-top:9px}
+.record-inline{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}.record-inline pre{margin:0 0 9px}
+.draft-message{font-size:12px;line-height:1.8;white-space:pre-wrap;font-style:italic;margin-bottom:9px}
+.answer-box{display:flex;gap:10px;align-items:flex-start;background:#e4ede6;color:#34513c;border-radius:9px;padding:14px 15px;margin-top:16px;font-size:12px;line-height:1.8}
+.answer-box svg{flex-shrink:0;margin-top:2px}.answer-box small{display:block;color:var(--muted);font-size:9px;margin-top:5px}
+.answer-box.escalated{background:#f3e6d4;color:#7a5c14}
+.activity-list{padding:0 22px 22px}.activity-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-top:1px solid #eee7de}.activity-row:first-child{border-top:0}
+.activity-row>div{flex:1;min-width:0}.activity-row strong{font-size:11px}.activity-row small{font-size:9px;color:var(--muted);display:block;margin-top:4px}
+.activity-actions{display:flex;gap:4px}
+@media(max-width:1180px){.agent-grid{grid-template-columns:1fr}.dashboard-grid{grid-template-columns:1fr}}
