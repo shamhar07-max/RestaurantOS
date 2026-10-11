@@ -1,0 +1,442 @@
+{
+  "scope": "All 54 research catalogue requirements; full brief remains authoritative for additional details.",
+  "statusDefinitions": {
+    "implemented": "Core acceptance behavior implemented; does not imply all enterprise extensions or external provider readiness.",
+    "partial": "Baseline exists; the note and stage plan identify missing behavior.",
+    "planned": "Retained in full scope; not implemented."
+  },
+  "requirements": [
+    {
+      "id": "ORD-01",
+      "priority": "P0",
+      "requirement": "Branch-specific menu and availability",
+      "acceptance": "Disabling an item at one branch leaves other",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-02",
+      "priority": "P0",
+      "requirement": "Valid modifier rules",
+      "acceptance": "Invalid combinations are rejected;",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-03",
+      "priority": "P0",
+      "requirement": "Separate order, bill and payment",
+      "acceptance": "Partial payment preserves unpaid balance",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-04",
+      "priority": "P0",
+      "requirement": "KDS/station routing",
+      "acceptance": "A split-station order retains one customer",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-05",
+      "priority": "P0",
+      "requirement": "Cancellation by stage",
+      "acceptance": "Cancellation after preparation creates",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-06",
+      "priority": "P0",
+      "requirement": "Refund/discount approvals",
+      "acceptance": "A user above their limit is blocked;",
+      "status": "partial",
+      "note": "Role-based approval gates implemented; configurable limits/delegations pending."
+    },
+    {
+      "id": "ORD-07",
+      "priority": "P0",
+      "requirement": "Idempotent channel import",
+      "acceptance": "Replaying the same external event creates",
+      "status": "implemented",
+      "note": "Authenticated/manual and guest API idempotency verified; authorised provider callback adapter pending."
+    },
+    {
+      "id": "ORD-08",
+      "priority": "P0",
+      "requirement": "Channel mapping errors",
+      "acceptance": "Unknown menu IDs enter an actionable",
+      "status": "partial",
+      "note": "Unknown IDs rejected atomically; persistent mapping-exception queue pending."
+    },
+    {
+      "id": "ORD-09",
+      "priority": "P0",
+      "requirement": "Packing and handover",
+      "acceptance": "Missing item is detectable; readiness and",
+      "status": "partial",
+      "note": "Ready/dispatch/acceptance distinct; packing checklist pending."
+    },
+    {
+      "id": "ORD-10",
+      "priority": "P0",
+      "requirement": "Daily tender close",
+      "acceptance": "Cash/card/refund differences are explained",
+      "status": "partial",
+      "note": "Till expected/count/variance implemented; cash-movement/tip and full tender-close reconciliation pending."
+    },
+    {
+      "id": "ORD-11",
+      "priority": "P0",
+      "requirement": "Offline recovery",
+      "acceptance": "Offline order sync preserves identity and",
+      "status": "partial",
+      "note": "Local draft pending/failed/sync implemented; signed durable device queue/conflict tests pending."
+    },
+    {
+      "id": "ORD-12",
+      "priority": "P1",
+      "requirement": "Reservations/deposits",
+      "acceptance": "Deposit allocation and cancellation follow",
+      "status": "partial",
+      "note": "Capacity/conflicts and reservation lifecycle implemented; deposits/waitlist pending."
+    },
+    {
+      "id": "ORD-13",
+      "priority": "P1",
+      "requirement": "Seat/table bill split",
+      "acceptance": "Split bills sum to the original amount with",
+      "status": "partial",
+      "note": "Immutable item-line/equal-amount allocations and split tenders; individual seat settlement pending."
+    },
+    {
+      "id": "ORD-14",
+      "priority": "P1",
+      "requirement": "Multi-brand menu publishing",
+      "acceptance": "Partial channel failure identifies affected",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-15",
+      "priority": "P1",
+      "requirement": "Capacity-based throttling",
+      "acceptance": "Two brands sharing a station do not",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "ORD-16",
+      "priority": "P1",
+      "requirement": "Channel settlements",
+      "acceptance": "Gross orders and deductions reconcile to the",
+      "status": "partial",
+      "note": "Manual gross/deduction/payout variance checked; provider statement and actual order matching pending."
+    },
+    {
+      "id": "ORD-17",
+      "priority": "P1",
+      "requirement": "Customer recovery",
+      "acceptance": "Complaint, replacement and refund link to",
+      "status": "partial",
+      "note": "Complaint lifecycle and original-tender refunds; structured recovery/replacement linkage pending."
+    },
+    {
+      "id": "ORD-18",
+      "priority": "P1",
+      "requirement": "Loyalty/direct ordering",
+      "acceptance": "Consent, redemption rules and financial",
+      "status": "partial",
+      "note": "Consent, point movements and direct ordering; coupon/gift-card/redemption integration pending."
+    },
+    {
+      "id": "MES-01",
+      "priority": "P0",
+      "requirement": "Versioned contract/rates",
+      "acceptance": "A future rate change leaves past closed",
+      "status": "partial",
+      "note": "Immutable close and version metadata; effective-dated rate-change editor pending."
+    },
+    {
+      "id": "MES-02",
+      "priority": "P0",
+      "requirement": "Billing-basis selection",
+      "acceptance": "Fixed/person, accepted-meal and",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-03",
+      "priority": "P0",
+      "requirement": "Separate eater and payer",
+      "acceptance": "One employer can pay for several sites",
+      "status": "partial",
+      "note": "Payer/site fields are separate; individual eater/entitlement model pending."
+    },
+    {
+      "id": "MES-04",
+      "priority": "P0",
+      "requirement": "Effective roster changes",
+      "acceptance": "Join/leave/transfer applies to the correct",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-05",
+      "priority": "P0",
+      "requirement": "Cutoff and demand snapshot",
+      "acceptance": "Late changes create exceptions; the original",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-06",
+      "priority": "P0",
+      "requirement": "Meal-type calendar",
+      "acceptance": "Breakfast/lunch/dinner and shift schedules",
+      "status": "partial",
+      "note": "Meal type in contract; detailed calendars and schedule/rate mapping pending."
+    },
+    {
+      "id": "MES-07",
+      "priority": "P0",
+      "requirement": "Production linkage",
+      "acceptance": "Demand produces traceable batches and",
+      "status": "partial",
+      "note": "Batch input/output workflow; automatic contract demand linkage pending."
+    },
+    {
+      "id": "MES-08",
+      "priority": "P0",
+      "requirement": "Bulk dispatch/acceptance",
+      "acceptance": "Partial receipt and rejection preserve",
+      "status": "partial",
+      "note": "Internal transfer and consumer dispatch evidence; bulk partial acceptance pending."
+    },
+    {
+      "id": "MES-09",
+      "priority": "P0",
+      "requirement": "Serving evidence",
+      "acceptance": "Individual scans and group counts are",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-10",
+      "priority": "P0",
+      "requirement": "Offline serving",
+      "acceptance": "Reconnection detects conflicting use while",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-11",
+      "priority": "P0",
+      "requirement": "Invoice evidence",
+      "acceptance": "Illustrative 472-meal example calculates",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-12",
+      "priority": "P0",
+      "requirement": "Period lock and adjustment",
+      "acceptance": "Changes after issue create controlled",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-13",
+      "priority": "P0",
+      "requirement": "Waste/leftover reconciliation",
+      "acceptance": "Produced, dispatched, served, remaining and",
+      "status": "partial",
+      "note": "Stock waste/consumption ledger; bulk meal balance reconciliation pending."
+    },
+    {
+      "id": "MES-14",
+      "priority": "P1",
+      "requirement": "Client approval portal",
+      "acceptance": "Client sees only their contracts/sites and",
+      "status": "planned",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-15",
+      "priority": "P1",
+      "requirement": "Guaranteed-minimum logic",
+      "acceptance": "Unused capacity and excess quantities follow",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "MES-16",
+      "priority": "P1",
+      "requirement": "Subscription pause/credit",
+      "acceptance": "Cutoff, entitlement and refund consequences",
+      "status": "partial",
+      "note": "Pause/resume and funded-entitlement counter; cutoff/credit consequences pending."
+    },
+    {
+      "id": "MES-17",
+      "priority": "P1",
+      "requirement": "Delivery calendar/address changes",
+      "acceptance": "Future changes do not replace past delivery",
+      "status": "partial",
+      "note": "Address/window fields; effective-dated calendar changes pending."
+    },
+    {
+      "id": "MES-18",
+      "priority": "P1",
+      "requirement": "Renewal and prepaid balance",
+      "acceptance": "Cash, remaining meals and service fulfilment",
+      "status": "partial",
+      "note": "Funded-versus-delivered counter; recurring payment, renewal and liability recognition pending."
+    },
+    {
+      "id": "CORE-01",
+      "priority": "P0",
+      "requirement": "Entity/facility/brand separation",
+      "acceptance": "Shared facility cannot expose one tenant's",
+      "status": "partial",
+      "note": "Tenant/outlet isolation enforced; multiple legal entities/brands/stock locations admin pending."
+    },
+    {
+      "id": "CORE-02",
+      "priority": "P0",
+      "requirement": "Recipe versions and units",
+      "acceptance": "Pack-to-gram conversion and modifier usage",
+      "status": "partial",
+      "note": "Recipe snapshots and ingredient base units; purchase-pack conversion and nested recipes pending."
+    },
+    {
+      "id": "CORE-03",
+      "priority": "P0",
+      "requirement": "Receipt/lot/expiry",
+      "acceptance": "Rejected stock remains unavailable;",
+      "status": "partial",
+      "note": "Accepted receipts/lots/expiry/holds; separate rejected receipt and inspection procedure pending."
+    },
+    {
+      "id": "CORE-04",
+      "priority": "P0",
+      "requirement": "Stock ledger",
+      "acceptance": "Every balance difference traces to a",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-05",
+      "priority": "P0",
+      "requirement": "Production batch/yield",
+      "acceptance": "Actual yield and waste explain input/output",
+      "status": "partial",
+      "note": "Single-input batch/yield and quality release; multi-input BOM and demand planning pending."
+    },
+    {
+      "id": "CORE-06",
+      "priority": "P0",
+      "requirement": "Transfer acknowledgement",
+      "acceptance": "In-transit stock is not simultaneously",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-07",
+      "priority": "P0",
+      "requirement": "Quality hold",
+      "acceptance": "Unauthorised role cannot release held stock",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-08",
+      "priority": "P0",
+      "requirement": "Traceability report",
+      "acceptance": "Selected lot produces real affected",
+      "status": "implemented",
+      "note": "Movement-linked orders/batches/transfers with evidence gaps; recursive recall traversal pending."
+    },
+    {
+      "id": "CORE-09",
+      "priority": "P0",
+      "requirement": "Approved checks/deviations",
+      "acceptance": "Failed check creates owned action and",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-10",
+      "priority": "P0",
+      "requirement": "Document/jurisdiction register",
+      "acceptance": "Expiry, verification status and local authority",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-11",
+      "priority": "P0",
+      "requirement": "Finance export integrity",
+      "acceptance": "Repeated export does not duplicate posting;",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-12",
+      "priority": "P0",
+      "requirement": "Tax mapping",
+      "acceptance": "Approved test invoices reproduce expected",
+      "status": "partial",
+      "note": "Demo VAT arithmetic and refund journal; reviewed tax mappings/legal invoices/credit notes pending."
+    },
+    {
+      "id": "CORE-13",
+      "priority": "P0",
+      "requirement": "Access and audit",
+      "acceptance": "Cross-tenant queries fail; critical changes",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-14",
+      "priority": "P0",
+      "requirement": "Backup/restore and export",
+      "acceptance": "Restore and user data export succeed with",
+      "status": "implemented",
+      "note": "See the staged plan and feature brief; automated implementation evidence is scoped to development, not commercial operator approval."
+    },
+    {
+      "id": "CORE-15",
+      "priority": "P1",
+      "requirement": "Purchase matching",
+      "acceptance": "Pack substitution and quantity/price",
+      "status": "partial",
+      "note": "Received-versus-invoiced value match; pack/tolerance/substitution review pending."
+    },
+    {
+      "id": "CORE-16",
+      "priority": "P1",
+      "requirement": "Allergen inheritance",
+      "acceptance": "Component change identifies affected",
+      "status": "partial",
+      "note": "Ingredient/modifier allergens inherited; component publication impact review pending."
+    },
+    {
+      "id": "CORE-17",
+      "priority": "P1",
+      "requirement": "Catering resources",
+      "acceptance": "Event staff, equipment and production",
+      "status": "partial",
+      "note": "Resources captured as event notes; equipment/staff/capacity conflicts pending."
+    },
+    {
+      "id": "CORE-18",
+      "priority": "P1",
+      "requirement": "ASP interface",
+      "acceptance": "Rejected structured invoice remains visible;",
+      "status": "planned",
+      "note": "Requires authorised ASP selection, access and validated invoice transmission adapter."
+    }
+  ]
+}

@@ -1,0 +1,403 @@
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+Fig & Pear
+
+Restaurant & Food Service
+
+A dedicated sector identity for restaurants, cafés, cloud kitchens,
+mess services, meal subscriptions, catering and production.
+
+
+
+
+The existing Business OS mark connects the sector to the product family. The palette
+gives it a distinct hospitality presence.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                      01
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+01 / Identity principle
+
+Warm enough for hospitality. Precise enough for operations.     Keep
+                                                                The faceted Business OS silhouette, the source
+Deep fig replaces the parent dark green; pear replaces the      wordmark geometry, clear hierarchy, solid color and
+red-orange core. Porcelain supports calm, readable surfaces.    generous spacing.
+Brass is a restrained material accent.
+                                                                Avoid
+The system is a Business OS sector identity, not a restaurant   Chef hats, forks, flames, generic food clip art, Dubai
+consumer brand. It should feel equally credible on a kitchen    skylines, neon gradients, metallic gloss and decorative
+screen, a mess-service record and an owner report.              overload.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                         02
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+02 / Core logo
+
+
+
+
+Primary horizontal master. The original DigitalBurj / Business OS wordmark outlines remain above the sector descriptor. Use this on documents
+and wider headers.
+
+
+
+
+Source was a raster WEBP in the repository. Supplied SVGs are cleaned path conversions, not an undisclosed original vector file. Do not distort or redraw them during
+implementation.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                                       03
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+03 / Logo variants
+
+
+
+
+   COMPACT / LIGHT                                  COMPACT / DARK                                     ONE COLOR / DARK INK
+
+
+
+
+Stacked masters are supplied for portrait layouts. Use an icon alone only where the product name is already present or space is constrained.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                              04
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+04 / Space, scale and small sizes
+
+                                                              Clear space
+                                                              Reserve at least 12% of visible icon height around standalone marks and lockups.
+                                                              Supplied files include internal margin; keep additional surrounding content outside it.
+
+
+                                                              Minimum recommendations
+                                                              Standalone icon: 24 CSS px. Use flat favicon geometry at 16-32 px. Primary lockup:
+                                                              360 CSS px. Compact lockup: 240 CSS px. Below this, display the icon with an
+                                                              accessible text label.
+
+
+
+
+These are practical starting points. Test the actual background, device and print method. Thin facet detail is decorative; the silhouette must remain
+legible.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                       05
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+05 / Palette and proportions
+
+
+
+
+Deep fig                      Pale pear                   Porcelain                    Mushroom                     Charred ink                  Muted brass
+
+#4B2943                       #D8D77C                     #F5F0E7                      #C9BAA8                      #211D21                      #C3A76C
+
+
+
+
+Light applications: approximately 60% porcelain/white, 25% fig/ink, 10% pear, 5% brass/mushroom. Dark applications: dominant ink/fig,
+porcelain text, pear actions. These are composition guides, not fixed layout quotas.
+
+
+
+
+Facet shades are defined in tokens for logo depth only. They are not additional primary brand colors. Use solid fills; do not recreate a green/red-orange parent treatment.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                                             06
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+06 / Measured contrast
+                                                             10.90:1 / AA normal-text contrast
+  Fig on porcelain
+
+
+                                                             8.21:1 / AA normal-text contrast
+  Pear on fig
+
+
+                                                             14.66:1 / AA normal-text contrast
+  Ink on porcelain
+
+
+                                                             8.21:1 / AA normal-text contrast
+  Fig on pear
+
+
+                                                             2.04:1 / Do not use for normal-size text
+  Brass on porcelain
+
+
+                                                             1.67:1 / Do not use for normal-size text
+  Mushroom on porcelain
+
+
+
+
+Contrast is calculated for these exact solid pairings. It does not certify accessibility of a whole UI. Use labels/icons as well as color for status. Brass and
+mushroom are accents, not body text on porcelain.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                                 07
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+07 / Typography
+
+Every meal.                                                                                       Made for operators.
+
+Every operation.                                                                                  Clear records. Confident decisions.
+
+
+
+
+Fraunces                                                                                          Manrope
+Editorial headlines and campaign emphasis. Recommended weights:                                   Interface, body, labels and documents. 400 for reading, 600 for
+600-700. Avoid using the serif for dense tables or long operational                               controls, 700 for headings. Use tabular numerals for quantities
+copy.                                                                                             and money where supported.
+
+
+
+
+Both variable font files and OFL licences are included. Logos are paths and need no font installation. No Arabic logo is invented; Arabic interface text requires a reviewed
+Arabic font and RTL testing.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                                              08
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+08 / Interface color roles
+      LIGHT MODE                                                                    DARK MODE
+
+
+
+
+       Kitchen overview                                                              Kitchen overview
+
+       Orders, batches and meal counts stay distinct.                                Orders, batches and meal counts stay distinct.
+
+
+
+
+          Review service                                                                Review service
+
+
+
+
+Brand colors and status colors have different jobs. Pear highlights an action; it does not always mean safe or successful. Error, warning,
+success and information use explicit labels and separate semantic tokens.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                            09
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+09 / Icons and patterns
+
+
+
+
+   Restaurant                         Cloud Kitchen                Mess Meals                      Cafe                            Bakery
+
+
+
+
+   Catering                           Inventory                    Procurement                     Food Safety                     Delivery
+
+
+
+
+Fourteen module icons share a 32-unit grid and 1.8-unit stroke. They inherit currentColor in the app. These are navigation symbols, never
+replacements for the Business OS identity mark.
+
+
+
+
+The open-arc pattern refers to service flow and plate geometry without becoming food clip art. Keep it behind content at low opacity. Never place
+low-contrast text over the pattern.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                   10
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+10 / Social and platform assets
+
+Supplied sizes
+Avatars: 1024 and 512 square.
+Open Graph: 1200 x 630.
+LinkedIn banner: 1584 x 396.
+YouTube: 2560 x 1440; central title content stays in the central
+safe region.
+Instagram: 1080 square and 1080 x 1350.
+Story: 1080 x 1920.
+
+
+
+
+                                                                   Platform crops can change. Check live previews before publication. Keep
+                                                                   logos away from profile-photo overlap and story controls. Editable SVGs
+                                                                   allow exact copy updates; publish the supplied PNG/WebP exports where
+                                                                   SVG is unsupported.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                            11
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+11 / Web assets and motion
+
+Web exports                                                                            Production rules
+Desktop hero: 1920 x 1080.                                                             Use actual HTML headings over decorative backgrounds
+Short banner: 1920 x 600.                                                              when SEO and accessibility matter. Raster banner text is
+Mobile: 1080 x 1350 and 800 x 1200.                                                    not a substitute for semantic page content.
+Header logos: transparent compact and horizontal variants.
+All SVG text is outlined; accompanying raster exports are                              Use modest 160/240/420 ms timing and one shared
+included.                                                                              easing. Respect reduced motion. Avoid perpetual glow,
+                                                                                       spinning logos and animated counters without meaning.
+
+
+
+
+Hero artwork here is an abstract brand application, not a restaurant photograph. A later photo campaign should use real kitchens, serving, packaging and
+dining detail with approved image rights.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                          12
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+12 / Print and stationery
+
+The stationery PDF has six pages: A4 letterhead, quotation/invoice layout, meal service record, menu template, and 85 x 55 mm
+business-card front/back with 3 mm bleed. Editable SVG layouts accompany it.
+
+
+
+
+Before printing                                                             Operational templates
+Replace every placeholder and confirm legal/tax content. Card trim is 85    Meal records keep produced, delivered, accepted and served
+x 55 mm inside the 91 x 61 mm page; the background bleeds beyond trim.      quantities distinct. Invoice and menu layouts are design
+Obtain a printer proof and use the printer's required ICC/output profile.   templates; they do not certify VAT compliance, nutrition
+                                                                            information or authority approval.
+PDF colors are RGB. No universal CMYK conversion or spot-color match is
+claimed. Brass is a solid color, not a metallic foil specification.         The HTML signature uses safe system typography. Replace
+                                                                            its sample email link before use.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                        13
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+13 / Identity misuse
+
+Do not                                                                    Do
+Stretch, rotate, mirror, recolor arbitrarily or add food symbols inside   Choose the supplied light/dark/mono master.
+the mark.                                                                 Use the flat favicon at small sizes.
+Place fig facets on a dark fig background without the inverse version.    Keep whitespace and a readable product name.
+Use brass or mushroom for small body text on porcelain.                   Use accessible HTML labels and semantic status
+Add fake legal approvals, operating claims or addresses to                colors.
+templates.                                                                Verify source, platform crops, typography and print
+Recreate the old green/red-orange parent palette in sector assets.        proofs.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                               14
+DIGITALBURJ / RESTAURANT & FOOD SERVICE
+
+
+
+
+14 / Source and handoff
+
+Repository source
+shamhar07-max/DigitalBurjFinalMain
+Default branch: claude/blissful-hawking-p3i8px
+Snapshot: 223b204c5903ec8c59d56985ebac86b9272af837
+Business OS page selects brand/business-os-lockup.webp in pages.js.
+Source logo blob: 6a3649a812f9466e97ca7ab1745d505a6fcecfbd.
+
+
+Read-only repository inspection. No repository commit or deployment was performed.
+
+
+
+
+Handoff
+Start with README.md and ASSET-INDEX.csv. Use SVGs for crisp scalable logos, PNGs for platform uploads, WebP for raster web imagery, the provided
+tokens for implementation and the guide for decisions. Fonts include OFL licences. Source records and SHA-256 hashes identify this delivery.
+
+
+
+
+IDENTITY SYSTEM / 11 OCTOBER 2026                                                                                                                   15
+
